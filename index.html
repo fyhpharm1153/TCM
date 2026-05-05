@@ -6,7 +6,7 @@
     <title>豐醫中藥儲位管理系統</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Firebase SDK (Compat) -->
+    <!-- Firebase SDK (Compat 版本確保最佳相容性) -->
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
@@ -20,34 +20,49 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
-        body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; transition: font-size 0.2s ease; }
-        .tab-active { @apply bg-emerald-600 text-white shadow-lg; }
+        body { 
+            font-family: 'Noto Sans TC', sans-serif; 
+            -webkit-tap-highlight-color: transparent; 
+            transition: font-size 0.2s ease;
+            @apply bg-slate-100 text-slate-900;
+        }
+        .tab-active { @apply bg-emerald-600 text-white shadow-lg scale-105; }
         .table-container { 
             overflow-x: auto; 
-            @apply rounded-xl shadow-inner bg-slate-50;
+            -webkit-overflow-scrolling: touch; 
+            @apply rounded-xl shadow-inner bg-white border border-slate-200;
+            max-height: 75vh;
         }
         table { border-collapse: separate; border-spacing: 0; width: 100%; table-layout: auto; }
         th { 
-            @apply bg-slate-100 text-slate-500 font-bold p-3 text-left text-xs uppercase tracking-wider sticky top-0 z-10 border-b border-slate-200 whitespace-nowrap select-none transition-colors;
+            @apply bg-slate-50 text-slate-600 font-bold p-3 text-left text-xs uppercase tracking-wider sticky top-0 z-10 border-b border-slate-200 whitespace-nowrap select-none transition-colors;
         }
-        th.sortable { @apply cursor-pointer hover:bg-slate-200; }
-        td { @apply p-3 text-sm border-b border-slate-100 bg-white transition-all duration-150; }
-        tr:hover td { @apply bg-emerald-50/50; }
-        .scanner-container video { border-radius: 1.5rem; }
-        .medicine-name-cell { white-space: normal; word-break: break-all; min-width: 100px; max-width: 250px; }
-        .storage-cell { @apply font-black text-emerald-600 whitespace-nowrap; }
+        th.sortable { @apply cursor-pointer hover:bg-slate-200 hover:text-emerald-700; }
+        td { @apply p-3 text-sm border-b border-slate-100 transition-all duration-150 leading-relaxed; }
+        tr:hover td { @apply bg-emerald-50/40; }
+        .scanner-container video { border-radius: 1rem; }
+        /* 藥品名稱欄位優化 */
+        .medicine-name-cell { 
+            white-space: normal; 
+            word-break: break-all; 
+            min-width: 140px; 
+            max-width: 280px;
+            @apply font-bold text-slate-800;
+        }
+        .storage-cell { @apply font-black text-emerald-600 whitespace-nowrap text-lg; }
+        .mono-font { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     </style>
 </head>
-<body class="bg-slate-50 text-slate-800">
+<body>
     <div id="root">
         <div class="flex flex-col items-center justify-center min-h-screen text-emerald-600 font-bold">
-            <div class="w-8 h-8 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin mb-2"></div>
-            系統啟動中，請稍候...
+            <div class="w-10 h-10 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin mb-3"></div>
+            系統載入中，若畫面空白請確認網路狀態...
         </div>
     </div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef, useMemo } = React;
+        const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
         // --- Firebase 設定 ---
         const firebaseConfig = {
@@ -68,6 +83,16 @@
         const TCM_APP_ID = 'fyh-tcm-manager-v1';
         const getMedicineRef = () => db.collection('artifacts').doc(TCM_APP_ID).collection('public').doc('data').collection('medicines');
 
+        // --- 子組件：排序圖示 (優化效能，移出 App 以減少重繪) ---
+        const SortIcon = ({ colKey, currentKey, direction }) => {
+            const sortable = ['代碼', '品名', '儲位', '廠商', '狀態'];
+            if (!sortable.includes(colKey)) return null;
+            if (currentKey !== colKey) return <i data-lucide="chevrons-up-down" className="w-3 h-3 ml-1 inline opacity-30"></i>;
+            return direction === 'asc' 
+                ? <i data-lucide="chevron-up" className="w-3 h-3 ml-1 inline text-emerald-600"></i>
+                : <i data-lucide="chevron-down" className="w-3 h-3 ml-1 inline text-emerald-600"></i>;
+        };
+
         const App = () => {
             const [user, setUser] = useState(null);
             const [medicines, setMedicines] = useState([]);
@@ -82,51 +107,46 @@
             const [isAdding, setIsAdding] = useState(false);
             const [isLoading, setIsLoading] = useState(false);
             const [fontSize, setFontSize] = useState(16);
+            const [displayLimit, setDisplayLimit] = useState(50); // 分段載入，解決崩潰核心
 
             const html5QrCode = useRef(null);
             const autoClearTimer = useRef(null);
 
-            // 初始化認證
+            // 初始化與監聽
             useEffect(() => {
                 const unsubscribeAuth = auth.onAuthStateChanged((u) => {
-                    if (u) {
-                        setUser(u);
-                    } else {
-                        auth.signInAnonymously().catch(err => console.error("Firebase Login Error:", err));
-                    }
+                    if (u) setUser(u);
+                    else auth.signInAnonymously();
                 });
                 return () => unsubscribeAuth();
             }, []);
 
-            // 監聽資料
             useEffect(() => {
                 if (!user) return;
                 const unsubscribeData = getMedicineRef().onSnapshot((snapshot) => {
                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     setMedicines(data);
-                }, (err) => {
-                    console.error("Firestore Sync Error:", err);
-                });
+                }, (err) => console.error("Cloud Sync Error", err));
                 return () => unsubscribeData();
             }, [user]);
 
-            // 5秒自動清空
+            // --- 5秒自動清空邏輯 ---
             useEffect(() => {
-                if (searchTerm) {
+                if (searchTerm || scanMatch) {
                     if (autoClearTimer.current) clearTimeout(autoClearTimer.current);
                     autoClearTimer.current = setTimeout(() => {
                         setSearchTerm('');
                         setScanMatch(null);
-                    }, 5000);
+                    }, 5000); 
                 }
                 return () => { if (autoClearTimer.current) clearTimeout(autoClearTimer.current); };
-            }, [searchTerm]);
+            }, [searchTerm, scanMatch]);
 
             useEffect(() => {
                 if (typeof lucide !== 'undefined') lucide.createIcons();
-            }, [activeTab, medicines, scanMatch, isEditing, isAdding, sortConfig, fontSize]);
+            }, [activeTab, medicines, scanMatch, isEditing, isAdding, sortConfig, fontSize, displayLimit]);
 
-            const speak = (text) => {
+            const speak = useCallback((text) => {
                 if (!window.speechSynthesis) return;
                 window.speechSynthesis.cancel();
                 const utterance = new SpeechSynthesisUtterance(text);
@@ -134,7 +154,7 @@
                 utterance.rate = 1.1;
                 utterance.volume = 1.0; 
                 window.speechSynthesis.speak(utterance);
-            };
+            }, []);
 
             const handleSave = async (item) => {
                 try {
@@ -142,11 +162,11 @@
                     await getMedicineRef().doc(id).set({ ...item, id }, { merge: true });
                     setIsAdding(false);
                     setIsEditing(null);
-                } catch (err) { alert("儲存失敗"); }
+                } catch (err) { alert("儲存資料失敗"); }
             };
 
             const handleDelete = async (id) => {
-                if (!confirm("確定要刪除此品項嗎？")) return;
+                if (!confirm("確定要從雲端刪除此藥品嗎？")) return;
                 await getMedicineRef().doc(id).delete();
             };
 
@@ -155,17 +175,59 @@
                 const cleanVal = val.replace(/\*/g, '').trim().toLowerCase();
                 if (!cleanVal) { setScanMatch(null); return; }
 
-                const exactMatch = medicines.find(m => 
+                const match = medicines.find(m => 
                     String(m.條碼 || '').replace(/\*/g, '').toLowerCase() === cleanVal || 
                     String(m.代碼 || '').toLowerCase() === cleanVal
                 );
 
-                if (exactMatch) {
-                    setScanMatch(exactMatch);
-                    speak(exactMatch.儲位);
+                if (match) {
+                    setScanMatch(match);
+                    speak(match.儲位);
                 } else {
                     setScanMatch(null);
                 }
+            };
+
+            // --- 極致穩定的排序與過濾 (修復 Crush 的關鍵) ---
+            const processedInventory = useMemo(() => {
+                try {
+                    const term = listSearchTerm.toLowerCase().trim();
+                    let filtered = medicines.filter(m => 
+                        String(m.品名 || '').toLowerCase().includes(term) || 
+                        String(m.代碼 || '').toLowerCase().includes(term) ||
+                        String(m.儲位 || '').toLowerCase().includes(term) ||
+                        String(m.廠商 || '').toLowerCase().includes(term) ||
+                        String(m.狀態 || '').toLowerCase().includes(term)
+                    );
+
+                    if (!sortConfig.key) return filtered;
+
+                    // 使用副本排序，避免直接修改 state
+                    return [...filtered].sort((a, b) => {
+                        const valA = String(a[sortConfig.key] || '').trim();
+                        const valB = String(b[sortConfig.key] || '').trim();
+                        if (sortConfig.direction === 'asc') {
+                            return valA.localeCompare(valB, 'zh-TW', { numeric: true });
+                        } else {
+                            return valB.localeCompare(valA, 'zh-TW', { numeric: true });
+                        }
+                    });
+                } catch (e) {
+                    console.error("Sorting logic caught a crash", e);
+                    return medicines;
+                }
+            }, [medicines, listSearchTerm, sortConfig]);
+
+            // 分段顯示：只渲染目前限制內的筆數
+            const visibleItems = useMemo(() => processedInventory.slice(0, displayLimit), [processedInventory, displayLimit]);
+
+            const toggleSort = (key) => {
+                const sortableKeys = ['代碼', '品名', '儲位', '廠商', '狀態'];
+                if (!sortableKeys.includes(key)) return;
+                setSortConfig(prev => ({
+                    key,
+                    direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+                }));
             };
 
             const getFilteredResults = () => {
@@ -177,50 +239,6 @@
                     String(m.儲位 || '').toLowerCase().includes(term) ||
                     String(m.條碼 || '').toLowerCase().includes(term)
                 ).slice(0, 15);
-            };
-
-            // --- 強化穩定性的排序與過濾邏輯 ---
-            const sortedInventory = useMemo(() => {
-                try {
-                    const term = listSearchTerm.toLowerCase().trim();
-                    let filtered = medicines.filter(m => 
-                        String(m.品名 || '').toLowerCase().includes(term) || 
-                        String(m.代碼 || '').toLowerCase().includes(term) ||
-                        String(m.儲位 || '').toLowerCase().includes(term) ||
-                        String(m.廠商 || '').toLowerCase().includes(term) ||
-                        String(m.條碼 || '').toLowerCase().includes(term) ||
-                        String(m.狀態 || '').toLowerCase().includes(term)
-                    );
-
-                    if (!sortConfig.key) return filtered;
-
-                    return filtered.sort((a, b) => {
-                        // 強制轉字串處理，防止 null 或 undefined 造成的崩潰
-                        const valA = String(a[sortConfig.key] || '').trim();
-                        const valB = String(b[sortConfig.key] || '').trim();
-                        
-                        // 數值化排序 (解決 複方2 排在 複方10 後面的問題)
-                        if (sortConfig.direction === 'asc') {
-                            return valA.localeCompare(valB, 'zh-TW', { numeric: true });
-                        } else {
-                            return valB.localeCompare(valA, 'zh-TW', { numeric: true });
-                        }
-                    });
-                } catch (error) {
-                    console.error("Sorting Logic Error:", error);
-                    return medicines; // 發生錯誤時返回原始陣列防止空白
-                }
-            }, [medicines, listSearchTerm, sortConfig]);
-
-            const toggleSort = (key) => {
-                // 限制僅特定欄位可排序
-                const allowedKeys = ['代碼', '品名', '儲位', '狀態', '廠商'];
-                if (!allowedKeys.includes(key)) return;
-
-                setSortConfig(prev => ({
-                    key,
-                    direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
-                }));
             };
 
             const handleExport = () => {
@@ -245,8 +263,7 @@
                 const reader = new FileReader();
                 reader.onload = async (evt) => {
                     try {
-                        const bstr = evt.target.result;
-                        const wb = XLSX.read(bstr, { type: 'binary' });
+                        const wb = XLSX.read(evt.target.result, { type: 'binary' });
                         const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
                         const batch = db.batch();
                         data.forEach((row, i) => {
@@ -264,8 +281,8 @@
                             }
                         });
                         await batch.commit();
-                        alert("匯入並同步至雲端成功");
-                    } catch (err) { alert("匯入失敗，請確認檔案格式。"); }
+                        alert("同步至雲端成功！");
+                    } catch (err) { alert("匯入失敗"); }
                     finally { setIsLoading(false); }
                 };
                 reader.readAsBinaryString(file);
@@ -277,12 +294,9 @@
                     html5QrCode.current = new Html5Qrcode("reader");
                     html5QrCode.current.start(
                         { facingMode: "environment" }, 
-                        { fps: 20, qrbox: { width: 250, height: 150 } }, 
-                        (decodedText) => {
-                            stopScanner();
-                            callback(decodedText);
-                        }
-                    ).catch(() => { setIsScannerOpen(false); });
+                        { fps: 20, qrbox: { width: 260, height: 160 } }, 
+                        (decodedText) => { stopScanner(); callback(decodedText); }
+                    ).catch(() => { setIsScannerOpen(false); alert("無法啟動相機"); });
                 }, 300);
             };
 
@@ -292,93 +306,82 @@
                 } else setIsScannerOpen(false);
             };
 
-            const getStatusColor = (status) => {
-                switch(status) {
-                    case '正常': return 'text-emerald-600 bg-emerald-50 border-emerald-100';
-                    case '缺貨中': return 'text-rose-600 bg-rose-50 border-rose-100';
-                    case '暫代': return 'text-blue-600 bg-blue-50 border-blue-100';
-                    case 'DC': return 'text-slate-400 bg-slate-100 border-slate-200';
-                    default: return 'text-slate-600';
+            const getStatusColor = (s) => {
+                switch(s) {
+                    case '正常': return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+                    case '缺貨中': return 'text-rose-700 bg-rose-50 border-rose-200';
+                    case '暫代': return 'text-sky-700 bg-sky-50 border-sky-200';
+                    case 'DC': return 'text-slate-500 bg-slate-100 border-slate-300';
+                    default: return 'text-slate-600 bg-white border-slate-200';
                 }
-            };
-
-            const SortIcon = ({ colKey }) => {
-                const allowedKeys = ['代碼', '品名', '儲位', '狀態', '廠商'];
-                if (!allowedKeys.includes(colKey)) return null;
-                if (sortConfig.key !== colKey) return <i data-lucide="chevrons-up-down" className="w-3 h-3 ml-1 inline opacity-30"></i>;
-                return sortConfig.direction === 'asc' 
-                    ? <i data-lucide="chevron-up" className="w-3 h-3 ml-1 inline text-emerald-600"></i>
-                    : <i data-lucide="chevron-down" className="w-3 h-3 ml-1 inline text-emerald-600"></i>;
             };
 
             return (
                 <div className="min-h-screen flex flex-col" style={{ fontSize: `${fontSize}px` }}>
+                    {/* Header: 字體縮放 */}
                     <header className="bg-emerald-800 text-white p-4 shadow-lg flex justify-between items-center sticky top-0 z-[60]">
                         <div className="flex items-center gap-2">
-                            <i data-lucide="database" className="w-5 h-5"></i>
-                            <h1 className="text-lg font-bold">豐醫中藥管理</h1>
+                            <i data-lucide="database" className="w-5 h-5 text-emerald-400"></i>
+                            <h1 className="text-lg font-black tracking-tight">豐醫中藥管理</h1>
                         </div>
-                        <div className="flex items-center gap-2">
-                            <div className="flex bg-white/20 rounded-lg p-1 gap-1 border border-white/30">
-                                <button onClick={() => setFontSize(f => Math.min(f + 2, 28))} className="px-3 py-1 text-sm font-black active:scale-90">A+</button>
-                                <button onClick={() => setFontSize(f => Math.max(f - 2, 12))} className="px-3 py-1 text-sm font-black active:scale-90">A-</button>
-                                <button onClick={() => setFontSize(16)} className="px-2 py-1 text-xs opacity-70">重置</button>
+                        <div className="flex items-center gap-3">
+                            <div className="flex bg-white/20 rounded-lg p-1 gap-1 border border-white/20 shadow-inner">
+                                <button onClick={() => setFontSize(f => Math.min(f + 2, 28))} className="px-3 py-1 text-sm font-black active:scale-90 transition">A+</button>
+                                <button onClick={() => setFontSize(f => Math.max(f - 2, 12))} className="px-3 py-1 text-sm font-black active:scale-90 transition">A-</button>
+                                <button onClick={() => setFontSize(16)} className="px-2 py-1 text-xs opacity-60 hover:opacity-100">重置</button>
                             </div>
-                            <div className="text-[10px] opacity-60 hidden sm:block">Total: {medicines.length}</div>
                         </div>
                     </header>
 
-                    <nav className="flex bg-white border-b sticky top-[60px] z-40 p-1 gap-1 shadow-sm">
+                    {/* Navbar */}
+                    <nav className="flex bg-white border-b sticky top-[62px] z-40 p-1 gap-1 shadow-sm">
                         {[
-                            { id: 'search', label: '快捷查詢', icon: 'zap' },
+                            { id: 'search', label: '查詢 / 掃描', icon: 'zap' },
                             { id: 'inventory', label: '品項總表', icon: 'table' }
                         ].map(t => (
-                            <button key={t.id} onClick={() => setActiveTab(t.id)}
-                                className={`flex-1 py-3 rounded-xl flex flex-col items-center gap-0.5 transition-all ${activeTab === t.id ? 'tab-active' : 'text-slate-400'}`}
+                            <button key={t.id} onClick={() => { setActiveTab(t.id); setDisplayLimit(50); }}
+                                className={`flex-1 py-3 rounded-xl flex flex-col items-center gap-0.5 transition-all ${activeTab === t.id ? 'tab-active' : 'text-slate-400 hover:bg-slate-50'}`}
                             >
                                 <i data-lucide={t.icon} className="w-5 h-5"></i>
-                                <span className="text-[10px] font-black">{t.label}</span>
+                                <span className="text-[10px] font-black uppercase tracking-widest">{t.label}</span>
                             </button>
                         ))}
                     </nav>
 
-                    <main className="flex-1 p-3 w-full max-w-4xl mx-auto">
+                    <main className="flex-1 p-3 w-full max-w-5xl mx-auto overflow-hidden">
+                        {/* Tab: SEARCH */}
                         {activeTab === 'search' && (
-                            <div className="space-y-4 animate-in fade-in">
-                                <button onClick={() => startScanner(handleSearchChange)} className="w-full bg-emerald-600 text-white py-6 rounded-2xl font-bold text-xl flex items-center justify-center gap-3 shadow-lg active:scale-95 transition">
-                                    <i data-lucide="scan-barcode" className="w-8 h-8"></i> 開啟掃描槍
+                            <div className="space-y-4 animate-in fade-in max-w-2xl mx-auto">
+                                <button onClick={() => startScanner(handleSearchChange)} className="w-full bg-emerald-600 text-white py-8 rounded-3xl font-black text-2xl flex flex-col items-center justify-center gap-2 shadow-xl active:scale-95 transition-all ring-4 ring-emerald-50">
+                                    <i data-lucide="scan-barcode" className="w-10 h-10"></i>
+                                    <span>開啟掃描槍</span>
                                 </button>
                                 
                                 <div className="relative group">
-                                    <input type="text" placeholder="輸入藥名、代碼、條碼..."
-                                        className="w-full pl-12 pr-12 py-4 bg-white border-2 border-slate-200 rounded-xl text-lg outline-none focus:border-emerald-500 shadow-sm transition-all focus:ring-4 focus:ring-emerald-50"
+                                    <input type="text" placeholder="手動搜尋：名稱、代碼、條碼、儲位..."
+                                        className="w-full pl-12 pr-12 py-5 bg-white border-2 border-slate-200 rounded-2xl text-xl outline-none focus:border-emerald-500 shadow-sm transition-all focus:ring-4 focus:ring-emerald-50 font-bold"
                                         value={searchTerm} onChange={(e) => handleSearchChange(e.target.value)}
                                         autoFocus
                                     />
                                     <i data-lucide="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-emerald-500"></i>
                                     {searchTerm && (
-                                        <button 
-                                            onClick={() => {setSearchTerm(''); setScanMatch(null);}}
-                                            className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500 p-1"
-                                        >
-                                            <i data-lucide="circle-x" className="w-6 h-6"></i>
+                                        <button onClick={() => {setSearchTerm(''); setScanMatch(null);}} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-rose-500 p-1">
+                                            <i data-lucide="circle-x" className="w-7 h-7"></i>
                                         </button>
                                     )}
                                 </div>
 
-                                {searchTerm && (
-                                    <div className="text-[10px] text-slate-400 text-right pr-2 animate-pulse">5秒後自動歸零...</div>
-                                )}
+                                {searchTerm && <div className="text-[10px] text-slate-400 text-right pr-2 animate-pulse font-bold">5秒無動作自動清除結果...</div>}
 
                                 {scanMatch && (
-                                    <div className="bg-white p-6 rounded-3xl border-4 border-emerald-500 shadow-2xl text-center space-y-3 animate-in zoom-in ring-8 ring-emerald-50">
-                                        <div className="text-slate-400 font-bold text-xs">{scanMatch.廠商} | {scanMatch.代碼}</div>
-                                        <div className="text-3xl font-black text-slate-800 leading-tight">{scanMatch.品名}</div>
-                                        <div className="text-8xl font-black text-emerald-600 my-2 tracking-tighter leading-none">{scanMatch.儲位}</div>
-                                        <div className="flex flex-col items-center gap-3">
-                                            <span className={`px-4 py-1 rounded-full font-bold text-xs border ${getStatusColor(scanMatch.狀態)}`}>{scanMatch.狀態 || '正常'}</span>
-                                            <button onClick={() => speak(scanMatch.儲位)} className="bg-emerald-600 text-white p-5 rounded-full inline-flex active:scale-90 shadow-lg hover:shadow-emerald-200 transition-all">
-                                                <i data-lucide="volume-2" className="w-10 h-10"></i>
+                                    <div className="bg-white p-8 rounded-[2.5rem] border-4 border-emerald-500 shadow-2xl text-center space-y-4 animate-in zoom-in ring-8 ring-emerald-50">
+                                        <div className="text-slate-400 font-bold text-xs tracking-widest uppercase">{scanMatch.廠商} | {scanMatch.代碼}</div>
+                                        <div className="text-4xl font-black text-slate-800 leading-tight">{scanMatch.品名}</div>
+                                        <div className="text-[9rem] font-black text-emerald-600 my-2 tracking-tighter leading-none">{scanMatch.儲位}</div>
+                                        <div className="flex flex-col items-center gap-4 pt-4 border-t border-slate-50">
+                                            <span className={`px-6 py-1.5 rounded-full font-black text-xs border-2 shadow-sm uppercase ${getStatusColor(scanMatch.狀態)}`}>{scanMatch.狀態 || '正常'}</span>
+                                            <button onClick={() => speak(scanMatch.儲位)} className="bg-emerald-600 text-white p-6 rounded-full inline-flex active:scale-90 shadow-xl">
+                                                <i data-lucide="volume-2" className="w-14 h-14"></i>
                                             </button>
                                         </div>
                                     </div>
@@ -386,16 +389,16 @@
 
                                 {searchTerm && !scanMatch && (
                                     <div className="space-y-2">
-                                        <div className="text-xs font-bold text-slate-400 ml-1 uppercase tracking-widest">搜尋清單</div>
+                                        <div className="text-xs font-black text-slate-400 ml-1 uppercase tracking-[0.2em]">搜尋命中清單</div>
                                         {getFilteredResults().map(m => (
-                                            <div key={m.id} onClick={() => { setScanMatch(m); speak(m.儲位); }} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center active:bg-emerald-50 cursor-pointer transition">
+                                            <div key={m.id} onClick={() => { setScanMatch(m); speak(m.儲位); }} className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex justify-between items-center active:bg-emerald-50 cursor-pointer transition">
                                                 <div className="medicine-name-cell pr-2">
-                                                    <div className="font-bold text-slate-800 text-base">{m.品名}</div>
-                                                    <div className="text-[10px] text-slate-400">{m.廠商} | {m.代碼}</div>
+                                                    <div className="font-black text-slate-800 text-lg">{m.品名}</div>
+                                                    <div className="text-[11px] text-slate-400 font-bold uppercase tracking-wider">{m.廠商} | {m.代碼}</div>
                                                 </div>
                                                 <div className="text-right flex-shrink-0">
-                                                    <div className="text-emerald-600 font-black text-2xl leading-none">{m.儲位}</div>
-                                                    <span className={`text-[9px] px-2 rounded-full font-bold inline-block mt-1 border ${getStatusColor(m.狀態)}`}>{m.狀態 || '正常'}</span>
+                                                    <div className="text-emerald-600 font-black text-3xl leading-none">{m.儲位}</div>
+                                                    <span className={`text-[10px] px-2 rounded-full font-black mt-2 inline-block border-2 ${getStatusColor(m.狀態)}`}>{m.狀態 || '正常'}</span>
                                                 </div>
                                             </div>
                                         ))}
@@ -404,121 +407,141 @@
                             </div>
                         )}
 
+                        {/* Tab: INVENTORY (優化版) */}
                         {activeTab === 'inventory' && (
-                            <div className="space-y-4 animate-in fade-in">
+                            <div className="space-y-4 animate-in fade-in h-full flex flex-col">
                                 <div className="bg-white p-4 rounded-2xl border shadow-sm flex flex-wrap gap-2 items-center">
-                                    <button onClick={() => setIsAdding(true)} className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-1 text-sm shadow-sm transition active:scale-95"><i data-lucide="plus" className="w-4 h-4"></i> 新增</button>
-                                    <button onClick={handleExport} className="bg-blue-600 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-1 text-sm shadow-sm transition active:scale-95"><i data-lucide="download" className="w-4 h-4"></i> 匯出</button>
-                                    <label className="bg-slate-700 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-1 text-sm shadow-sm cursor-pointer active:bg-slate-800">
-                                        <i data-lucide="upload" className="w-4 h-4"></i> 匯入
+                                    <button onClick={() => setIsAdding(true)} className="bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-black text-sm shadow-md transition active:scale-95"><i data-lucide="plus-circle" className="w-4 h-4 mr-1"></i> 新增</button>
+                                    <button onClick={handleExport} className="bg-blue-600 text-white px-5 py-2.5 rounded-xl font-black text-sm shadow-md transition active:scale-95"><i data-lucide="download" className="w-4 h-4 mr-1"></i> 匯出</button>
+                                    <label className="bg-slate-700 text-white px-5 py-2.5 rounded-xl font-black text-sm shadow-md cursor-pointer active:bg-slate-800 transition">
+                                        <i data-lucide="upload" className="w-4 h-4 mr-1"></i> 匯入
                                         <input type="file" className="hidden" accept=".xlsx,.csv" onChange={handleImport} disabled={isLoading} />
                                     </label>
-                                    <div className="flex-1 min-w-[180px] relative">
-                                        <input type="text" placeholder="快速搜尋..." className="w-full pl-10 pr-4 py-2 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500 text-sm font-bold" value={listSearchTerm} onChange={(e) => setListSearchTerm(e.target.value)} />
+                                    <div className="flex-1 min-w-[200px] relative">
+                                        <input type="text" placeholder="關鍵字過濾總表..." className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500 text-sm font-black" value={listSearchTerm} onChange={(e) => { setListSearchTerm(e.target.value); setDisplayLimit(50); }} />
                                         <i data-lucide="filter" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4"></i>
                                     </div>
                                 </div>
 
-                                {isLoading && <div className="p-4 bg-emerald-50 text-emerald-600 text-center rounded-2xl animate-pulse font-black shadow-inner">同步數據中...</div>}
+                                {isLoading && <div className="p-4 bg-emerald-50 text-emerald-600 text-center rounded-2xl animate-pulse font-black shadow-inner">正在同步數據中...</div>}
 
-                                <div className="table-container">
+                                <div className="table-container shadow-xl">
                                     <table>
                                         <thead>
                                             <tr>
-                                                <th className="sortable" onClick={() => toggleSort('代碼')}>代碼 <SortIcon colKey="代碼" /></th>
-                                                <th className="sortable" onClick={() => toggleSort('品名')}>藥品名稱 <SortIcon colKey="品名" /></th>
-                                                <th className="sortable" onClick={() => toggleSort('儲位')}>儲位 <SortIcon colKey="儲位" /></th>
-                                                <th className="sortable" onClick={() => toggleSort('狀態')}>狀態 <SortIcon colKey="狀態" /></th>
-                                                <th className="sortable" onClick={() => toggleSort('廠商')}>廠商 <SortIcon colKey="廠商" /></th>
-                                                <th>條碼</th>
-                                                <th className="text-right">功能</th>
+                                                <th className="sortable" onClick={() => toggleSort('代碼')}>代碼 <SortIcon colKey="代碼" currentKey={sortConfig.key} direction={sortConfig.direction} /></th>
+                                                <th className="sortable" onClick={() => toggleSort('品名')}>品名 <SortIcon colKey="品名" currentKey={sortConfig.key} direction={sortConfig.direction} /></th>
+                                                <th className="sortable text-center" onClick={() => toggleSort('儲位')}>儲位 <SortIcon colKey="儲位" currentKey={sortConfig.key} direction={sortConfig.direction} /></th>
+                                                <th className="sortable text-center" onClick={() => toggleSort('廠商')}>廠商 <SortIcon colKey="廠商" currentKey={sortConfig.key} direction={sortConfig.direction} /></th>
+                                                <th className="sortable text-center" onClick={() => toggleSort('狀態')}>狀態 <SortIcon colKey="狀態" currentKey={sortConfig.key} direction={sortConfig.direction} /></th>
+                                                <th className="text-center">條碼狀態</th>
+                                                <th className="text-right pr-4">操作</th>
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {sortedInventory.map(m => (
+                                            {visibleItems.map(m => (
                                                 <tr key={m.id}>
-                                                    <td className="font-mono text-[11px] text-slate-400 font-bold">{m.代碼}</td>
-                                                    <td className="font-bold text-slate-800 text-base medicine-name-cell">{m.品名}</td>
-                                                    <td className="storage-cell">
-                                                        <span className="bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-100">{m.儲位}</span>
+                                                    <td className="mono-font text-[11px] text-slate-400 font-bold">{m.代碼}</td>
+                                                    <td className="medicine-name-cell">{m.品名}</td>
+                                                    <td className="text-center">
+                                                        <span className="storage-cell bg-emerald-50 px-3 py-1 rounded-lg border border-emerald-100 shadow-sm">{m.儲位}</span>
                                                     </td>
-                                                    <td>
-                                                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold whitespace-nowrap border ${getStatusColor(m.狀態)}`}>
+                                                    <td className="text-center text-slate-500 font-bold text-xs uppercase tracking-tight">{m.廠商}</td>
+                                                    <td className="text-center">
+                                                        <span className={`text-[10px] px-3 py-1 rounded-full font-black border shadow-sm ${getStatusColor(m.狀態)} whitespace-nowrap`}>
                                                             {m.狀態 || '正常'}
                                                         </span>
                                                     </td>
-                                                    <td className="text-slate-500 text-xs font-bold">{m.廠商}</td>
-                                                    <td>
+                                                    <td className="text-center">
                                                         {m.條碼 ? (
-                                                            <span className="font-mono text-[11px] text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100">{m.條碼}</span>
+                                                            <span className="mono-font text-[10px] text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 font-bold">已連結</span>
                                                         ) : (
                                                             <button 
                                                                 onClick={() => {setBindingTarget(m); startScanner(val => handleSave({...m, 條碼: val}));}}
-                                                                className="text-[10px] font-black bg-orange-500 text-white px-3 py-1 rounded-lg active:scale-95 shadow-md shadow-orange-100"
-                                                            >待建</button>
+                                                                className="text-[10px] font-black bg-gradient-to-r from-orange-500 to-amber-600 text-white px-3 py-1.5 rounded-lg active:scale-95 shadow-md shadow-orange-100"
+                                                            >待建檔</button>
                                                         )}
                                                     </td>
-                                                    <td className="text-right flex justify-end gap-1">
-                                                        <button onClick={() => setIsEditing(m)} className="p-2.5 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"><i data-lucide="edit-2" className="w-5 h-5"></i></button>
-                                                        <button onClick={() => handleDelete(m.id)} className="p-2.5 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"><i data-lucide="trash-2" className="w-5 h-5"></i></button>
+                                                    <td className="text-right pr-2">
+                                                        <div className="flex justify-end gap-1">
+                                                            <button onClick={() => setIsEditing(m)} className="p-3 text-slate-300 hover:text-emerald-600 transition-transform" title="修改"><i data-lucide="edit-2" className="w-5 h-5"></i></button>
+                                                            <button onClick={() => handleDelete(m.id)} className="p-3 text-slate-300 hover:text-rose-600 transition-transform" title="刪除"><i data-lucide="trash-2" className="w-5 h-5"></i></button>
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             ))}
                                         </tbody>
                                     </table>
+                                    {displayLimit < processedInventory.length && (
+                                        <div className="p-6 text-center bg-slate-50 border-t border-slate-100 sticky bottom-0">
+                                            <button 
+                                                onClick={() => setDisplayLimit(p => p + 50)}
+                                                className="bg-white text-emerald-700 border-2 border-emerald-600 px-8 py-3 rounded-full font-black hover:bg-emerald-600 hover:text-white transition shadow-lg active:scale-95"
+                                            >載入更多品項 (+50)</button>
+                                            <div className="text-[10px] text-slate-400 mt-2 font-bold uppercase tracking-[0.2em]">目前顯示 {visibleItems.length} / 共 {processedInventory.length} 筆資料</div>
+                                        </div>
+                                    )}
+                                    {processedInventory.length === 0 && !isLoading && (
+                                        <div className="p-20 text-center text-slate-300 font-black text-xl italic tracking-widest">目前查無資料</div>
+                                    )}
                                 </div>
                             </div>
                         )}
                     </main>
 
-                    {/* 相機視窗 */}
+                    {/* 相機 Modal */}
                     {isScannerOpen && (
-                        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-6 bg-black/95 animate-in fade-in">
-                            <div className="text-white mb-6 text-center">
-                                <div className="text-2xl font-black text-emerald-400 mb-1">{bindingTarget ? `正在掃描：${bindingTarget.品名}` : '請對準藥瓶條碼'}</div>
-                                <div className="text-xs opacity-70">辨識成功將自動關閉</div>
+                        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-6 bg-black/95 animate-in fade-in duration-500">
+                            <div className="text-white mb-8 text-center">
+                                <div className="text-2xl font-black text-emerald-400 mb-2 tracking-tight uppercase tracking-widest">{bindingTarget ? `正在綁定：${bindingTarget.品名}` : '藥品定位系統'}</div>
+                                <div className="text-sm opacity-60 flex items-center justify-center gap-3 italic">
+                                    <div className="w-2 h-2 bg-emerald-400 rounded-full animate-ping"></div> 請對準藥瓶一維條碼
+                                </div>
                             </div>
-                            <div id="reader" className="w-full max-w-sm rounded-[2rem] overflow-hidden border-4 border-emerald-500 shadow-2xl scanner-container bg-white"></div>
-                            <button onClick={stopScanner} className="mt-12 bg-white text-slate-900 px-12 py-4 rounded-full font-black text-xl shadow-xl transition active:scale-95">取消掃描</button>
+                            <div id="reader" className="w-full max-w-sm rounded-[3rem] overflow-hidden border-[8px] border-emerald-500 shadow-[0_0_80px_rgba(16,185,129,0.5)] bg-white scanner-container"></div>
+                            <button onClick={stopScanner} className="mt-14 bg-white text-slate-900 px-16 py-5 rounded-full font-black text-2xl shadow-2xl active:scale-95 transition-all">結束掃描</button>
                         </div>
                     )}
 
-                    {/* 編輯/新增視窗 */}
+                    {/* 編輯 / 新增 Modal */}
                     {(isEditing || isAdding) && (
-                        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in">
-                            <div className="bg-white w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl animate-in slide-in-from-bottom-10">
-                                <div className="flex justify-between items-center mb-8">
-                                    <div className="flex items-center gap-3">
-                                        <div className="bg-emerald-100 text-emerald-600 p-3 rounded-2xl">
-                                            <i data-lucide={isAdding ? "plus-circle" : "edit-3"} className="w-6 h-6"></i>
+                        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[100] flex items-center justify-center p-4 animate-in fade-in">
+                            <div className="bg-white w-full max-w-lg rounded-[3rem] p-10 shadow-2xl animate-in slide-in-from-bottom-20 duration-500 overflow-y-auto max-h-[90vh]">
+                                <div className="flex justify-between items-center mb-10">
+                                    <div className="flex items-center gap-4">
+                                        <div className="bg-emerald-100 text-emerald-600 p-4 rounded-[1.5rem] shadow-inner">
+                                            <i data-lucide={isAdding ? "plus-circle" : "edit-3"} className="w-8 h-8"></i>
                                         </div>
-                                        <h3 className="font-black text-2xl text-slate-800">{isAdding ? '新增中藥' : '編輯項目'}</h3>
+                                        <div>
+                                            <h3 className="font-black text-3xl text-slate-800">{isAdding ? '新增品項' : '修改藥品'}</h3>
+                                            <p className="text-[10px] font-bold text-slate-400 tracking-[0.2em] uppercase">Cloud Record Sync</p>
+                                        </div>
                                     </div>
-                                    <button onClick={() => { setIsEditing(null); setIsAdding(false); }} className="text-slate-400 p-2"><i data-lucide="x" className="w-10 h-10"></i></button>
+                                    <button onClick={() => { setIsEditing(null); setIsAdding(false); }} className="text-slate-300 hover:text-slate-600 transition-all"><i data-lucide="circle-x" className="w-10 h-10"></i></button>
                                 </div>
-                                <div className="space-y-5">
-                                    <div className="space-y-1.5">
-                                        <label className="text-xs font-black text-slate-400 ml-2 uppercase tracking-widest">品名</label>
-                                        <input id="f-name" className="w-full p-4 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-black text-lg shadow-inner" defaultValue={isEditing?.品名 || ''} />
+                                <div className="space-y-6">
+                                    <div className="space-y-2">
+                                        <label className="text-[11px] font-black text-slate-500 ml-2 uppercase tracking-widest">Medicine Name 藥品品名</label>
+                                        <input id="f-name" className="w-full p-5 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-black text-xl shadow-inner" defaultValue={isEditing?.品名 || ''} />
                                     </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-1.5">
-                                            <label className="text-xs font-black text-slate-400 ml-2 uppercase tracking-widest">儲位</label>
-                                            <input id="f-loc" className="w-full p-4 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-black text-lg shadow-inner" defaultValue={isEditing?.儲位 || ''} />
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="space-y-2">
+                                            <label className="text-[11px] font-black text-slate-500 ml-2 uppercase tracking-widest">Storage 儲位</label>
+                                            <input id="f-loc" className="w-full p-5 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-black text-xl shadow-inner" defaultValue={isEditing?.儲位 || ''} />
                                         </div>
-                                        <div className="space-y-1.5">
-                                            <label className="text-xs font-black text-slate-400 ml-2 uppercase tracking-widest">代碼</label>
-                                            <input id="f-code" className="w-full p-4 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-black text-lg shadow-inner" defaultValue={isEditing?.代碼 || ''} />
+                                        <div className="space-y-2">
+                                            <label className="text-[11px] font-black text-slate-500 ml-2 uppercase tracking-widest">Code 代碼</label>
+                                            <input id="f-code" className="w-full p-5 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-black text-xl shadow-inner uppercase" defaultValue={isEditing?.代碼 || ''} />
                                         </div>
                                     </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-1.5">
-                                            <label className="text-xs font-black text-slate-400 ml-2 uppercase tracking-widest">廠商</label>
-                                            <input id="f-vendor" className="w-full p-4 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-bold shadow-inner" defaultValue={isEditing?.廠商 || ''} />
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="space-y-2">
+                                            <label className="text-[11px] font-black text-slate-500 ml-2 uppercase tracking-widest">Vendor 廠商</label>
+                                            <input id="f-vendor" className="w-full p-5 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-bold shadow-inner" defaultValue={isEditing?.廠商 || ''} />
                                         </div>
-                                        <div className="space-y-1.5">
-                                            <label className="text-xs font-black text-slate-400 ml-2 uppercase tracking-widest">狀態</label>
-                                            <select id="f-status" className="w-full p-4 font-black bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none shadow-inner appearance-none" defaultValue={isEditing?.狀態 || '正常'}>
+                                        <div className="space-y-2">
+                                            <label className="text-[11px] font-black text-slate-500 ml-2 uppercase tracking-widest">Status 狀態</label>
+                                            <select id="f-status" className="w-full p-5 font-black bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none shadow-inner appearance-none" defaultValue={isEditing?.狀態 || '正常'}>
                                                 <option value="正常">正常</option>
                                                 <option value="缺貨中">缺貨中</option>
                                                 <option value="暫代">暫代</option>
@@ -526,14 +549,14 @@
                                             </select>
                                         </div>
                                     </div>
-                                    <div className="space-y-1.5">
-                                        <label className="text-xs font-black text-slate-400 ml-2 uppercase tracking-widest">條碼</label>
-                                        <div className="flex gap-2">
-                                            <input id="f-barcode" className="flex-1 p-4 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-mono text-base shadow-inner" defaultValue={isEditing?.條碼 || ''} />
+                                    <div className="space-y-2">
+                                        <label className="text-[11px] font-black text-slate-500 ml-2 uppercase tracking-widest">Barcode 國際條碼 (選填)</label>
+                                        <div className="flex gap-4">
+                                            <input id="f-barcode" className="flex-1 p-5 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-mono text-base shadow-inner" defaultValue={isEditing?.條碼 || ''} />
                                             <button 
                                                 onClick={() => startScanner(val => { document.getElementById('f-barcode').value = val; })}
-                                                className="bg-slate-900 text-white px-5 rounded-2xl active:scale-90 transition-all shadow-lg"
-                                            ><i data-lucide="maximize"></i></button>
+                                                className="bg-slate-900 text-white px-8 rounded-3xl active:scale-90 transition-all shadow-xl flex items-center justify-center"
+                                            ><i data-lucide="maximize" className="w-6 h-6"></i></button>
                                         </div>
                                     </div>
                                 </div>
@@ -547,8 +570,8 @@
                                         條碼: document.getElementById('f-barcode').value,
                                         狀態: document.getElementById('f-status').value,
                                     })}
-                                    className="w-full py-5 bg-emerald-600 text-white rounded-[2rem] font-black text-xl mt-10 shadow-xl hover:bg-emerald-700 active:scale-95 transition-all"
-                                >確認並更新雲端資料</button>
+                                    className="w-full py-6 bg-emerald-600 text-white rounded-[2.5rem] font-black text-2xl mt-12 shadow-2xl hover:bg-emerald-700 active:scale-95 transition-all uppercase tracking-widest"
+                                >更新資料並同步</button>
                             </div>
                         </div>
                     )}

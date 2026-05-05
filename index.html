@@ -24,9 +24,10 @@
         .tab-active { @apply bg-emerald-600 text-white shadow-inner; }
         .scanner-container video { border-radius: 1rem; }
         .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-        table { border-collapse: collapse; width: 100%; min-width: 700px; }
-        th { @apply bg-slate-100 text-slate-500 font-bold p-3 text-left text-xs sticky top-0; }
+        table { border-collapse: collapse; width: 100%; min-width: 850px; }
+        th { @apply bg-slate-100 text-slate-500 font-bold p-3 text-left text-xs sticky top-0 z-10 border-b; }
         td { @apply p-3 text-sm border-b border-slate-100; }
+        select { @apply appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 outline-none focus:border-emerald-500; }
     </style>
 </head>
 <body class="bg-slate-50">
@@ -118,6 +119,59 @@
                 await getMedicineRef().doc(id).delete();
             };
 
+            const handleExport = () => {
+                if (medicines.length === 0) { alert("目前沒有資料可供匯出。"); return; }
+                const exportData = medicines.map(m => ({
+                    '代碼': m.代碼 || '',
+                    '品名': m.品名 || '',
+                    '儲位': m.儲位 || '',
+                    '廠商': m.廠商 || '',
+                    '條碼': m.條碼 || '',
+                    '狀態': m.狀態 || '正常'
+                }));
+                const ws = XLSX.utils.json_to_sheet(exportData);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "中藥品項清單");
+                XLSX.writeFile(wb, `豐醫中藥品項表_${new Date().toISOString().split('T')[0]}.xlsx`);
+            };
+
+            const handleImport = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                setIsLoading(true);
+                const reader = new FileReader();
+                reader.onload = async (evt) => {
+                    try {
+                        const bstr = evt.target.result;
+                        const wb = XLSX.read(bstr, { type: 'binary' });
+                        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+                        const batch = db.batch();
+                        let count = 0;
+                        for (const row of data) {
+                            if (row['品名']) {
+                                const id = row['代碼'] ? `med_${row['代碼']}` : `med_${Date.now()}_${count}`;
+                                const docRef = getMedicineRef().doc(id);
+                                batch.set(docRef, {
+                                    id,
+                                    代碼: String(row['代碼'] || ''),
+                                    品名: String(row['品名'] || ''),
+                                    儲位: String(row['儲位'] || ''),
+                                    廠商: String(row['廠商'] || ''),
+                                    條碼: String(row['條碼'] || '').replace(/\*/g, '').trim(),
+                                    狀態: String(row['狀態'] || '正常')
+                                }, { merge: true });
+                                count++;
+                                if (count >= 450) break; // Firestore 限制
+                            }
+                        }
+                        await batch.commit();
+                        alert(`成功匯入 ${count} 筆資料！`);
+                    } catch (err) { alert("匯入失敗，請檢查格式。"); }
+                    finally { setIsLoading(false); e.target.value = null; }
+                };
+                reader.readAsBinaryString(file);
+            };
+
             const startScanner = (callback) => {
                 setIsScannerOpen(true);
                 setTimeout(() => {
@@ -129,10 +183,7 @@
                             stopScanner();
                             callback(decodedText);
                         }
-                    ).catch(() => {
-                        alert("無法開啟相機");
-                        setIsScannerOpen(false);
-                    });
+                    ).catch(() => { alert("無法開啟相機"); setIsScannerOpen(false); });
                 }, 300);
             };
 
@@ -152,9 +203,10 @@
 
             const getSortedItems = () => {
                 let filtered = medicines.filter(m => 
-                    (m.品名 || '').includes(listSearchTerm) || 
-                    (m.儲位 || '').includes(listSearchTerm) ||
-                    (m.代碼 || '').includes(listSearchTerm)
+                    (m.品名 || '').toLowerCase().includes(listSearchTerm.toLowerCase()) || 
+                    (m.儲位 || '').toLowerCase().includes(listSearchTerm.toLowerCase()) ||
+                    (m.代碼 || '').toLowerCase().includes(listSearchTerm.toLowerCase()) ||
+                    (m.廠商 || '').toLowerCase().includes(listSearchTerm.toLowerCase())
                 );
                 filtered.sort((a, b) => {
                     const valA = String(a[sortConfig.key] || '');
@@ -162,6 +214,16 @@
                     return sortConfig.direction === 'asc' ? valA.localeCompare(valB, 'zh-TW') : valB.localeCompare(valA, 'zh-TW');
                 });
                 return filtered;
+            };
+
+            const getStatusColor = (status) => {
+                switch(status) {
+                    case '正常': return 'bg-emerald-50 text-emerald-600';
+                    case '缺貨中': return 'bg-red-50 text-red-600';
+                    case '暫代': return 'bg-blue-50 text-blue-600';
+                    case 'DC': return 'bg-slate-200 text-slate-600';
+                    default: return 'bg-slate-100 text-slate-400';
+                }
             };
 
             return (
@@ -179,9 +241,7 @@
                             { id: 'search', label: '找儲位', icon: 'search' },
                             { id: 'inventory', label: '品項表', icon: 'list' }
                         ].map(t => (
-                            <button 
-                                key={t.id} 
-                                onClick={() => setActiveTab(t.id)}
+                            <button key={t.id} onClick={() => setActiveTab(t.id)}
                                 className={`flex-1 py-3 rounded-lg flex flex-col items-center gap-0.5 transition-all ${activeTab === t.id ? 'tab-active' : 'text-slate-400'}`}
                             >
                                 <i data-lucide={t.icon} className="w-5 h-5"></i>
@@ -197,8 +257,7 @@
                                     <i data-lucide="scan-line" className="w-8 h-8"></i> 開啟掃描鏡頭
                                 </button>
                                 <div className="relative">
-                                    <input 
-                                        type="text" placeholder="手動輸入代碼或掃描條碼..."
+                                    <input type="text" placeholder="手動輸入代碼或掃描條碼..."
                                         className="w-full pl-12 pr-4 py-4 bg-white border-2 border-slate-200 rounded-xl text-lg outline-none focus:border-emerald-500 shadow-sm"
                                         value={searchTerm} onChange={(e) => handleSearch(e.target.value)}
                                     />
@@ -208,8 +267,13 @@
                                     <div className="bg-white p-8 rounded-3xl border-t-8 border-emerald-500 shadow-2xl text-center space-y-4">
                                         <div className="text-slate-400 font-bold">{scanResult.廠商} | {scanResult.代碼}</div>
                                         <div className="text-3xl font-black text-slate-800">{scanResult.品名}</div>
-                                        <div className="text-8xl font-black text-emerald-600 my-4">{scanResult.儲位}</div>
-                                        <button onClick={() => speak(scanResult.儲位)} className="bg-emerald-100 text-emerald-600 p-5 rounded-full inline-flex active:bg-emerald-200"><i data-lucide="volume-2" className="w-10 h-10"></i></button>
+                                        <div className="text-8xl font-black text-emerald-600 my-4 tracking-tighter">{scanResult.儲位}</div>
+                                        <div className={`inline-block px-4 py-1 rounded-full text-sm font-bold ${getStatusColor(scanResult.狀態)}`}>{scanResult.狀態 || '正常'}</div>
+                                        <div className="block pt-4">
+                                            <button onClick={() => speak(scanResult.儲位)} className="bg-emerald-100 text-emerald-600 p-5 rounded-full inline-flex active:bg-emerald-200 shadow-inner">
+                                                <i data-lucide="volume-2" className="w-10 h-10"></i>
+                                            </button>
+                                        </div>
                                     </div>
                                 )}
                             </div>
@@ -218,24 +282,31 @@
                         {activeTab === 'inventory' && (
                             <div className="space-y-4 animate-in fade-in">
                                 <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-wrap gap-2 items-center">
-                                    <button onClick={() => setIsAdding(true)} className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-1 shadow-sm"><i data-lucide="plus" className="w-4 h-4"></i> 新增</button>
+                                    <button onClick={() => setIsAdding(true)} className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-1 shadow-sm transition active:scale-95"><i data-lucide="plus" className="w-4 h-4"></i> 新增</button>
+                                    <label className="bg-slate-700 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-1 shadow-sm transition active:scale-95 cursor-pointer">
+                                        <i data-lucide="upload" className="w-4 h-4"></i> Excel 匯入
+                                        <input type="file" className="hidden" accept=".xlsx,.csv" onChange={handleImport} disabled={isLoading} />
+                                    </label>
+                                    <button onClick={handleExport} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-1 shadow-sm transition active:scale-95"><i data-lucide="download" className="w-4 h-4"></i> 匯出 Excel</button>
                                     <div className="flex-1 relative min-w-[200px]">
                                         <input type="text" placeholder="搜尋關鍵字..." className="w-full pl-10 pr-4 py-2 bg-slate-50 border rounded-lg outline-none focus:border-emerald-500" onChange={(e) => setListSearchTerm(e.target.value)} />
                                         <i data-lucide="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4"></i>
                                     </div>
                                 </div>
 
+                                {isLoading && <div className="p-4 bg-blue-50 text-blue-600 text-center rounded-xl animate-pulse font-bold">處理中，請稍候...</div>}
+
                                 <div className="bg-white rounded-xl border shadow-sm table-container">
                                     <table>
                                         <thead>
                                             <tr>
-                                                <th onClick={() => setSortConfig({key: '代碼', direction: sortConfig.direction === 'asc' ? 'desc' : 'asc'})}>代碼 <i data-lucide="arrow-up-down" className="w-3 h-3 inline"></i></th>
-                                                <th onClick={() => setSortConfig({key: '品名', direction: sortConfig.direction === 'asc' ? 'desc' : 'asc'})}>品名 <i data-lucide="arrow-up-down" className="w-3 h-3 inline"></i></th>
-                                                <th onClick={() => setSortConfig({key: '儲位', direction: sortConfig.direction === 'asc' ? 'desc' : 'asc'})}>儲位 <i data-lucide="arrow-up-down" className="w-3 h-3 inline"></i></th>
+                                                <th className="cursor-pointer" onClick={() => setSortConfig({key: '代碼', direction: sortConfig.direction === 'asc' ? 'desc' : 'asc'})}>代碼 <i data-lucide="arrow-up-down" className="w-3 h-3 inline"></i></th>
+                                                <th className="cursor-pointer" onClick={() => setSortConfig({key: '品名', direction: sortConfig.direction === 'asc' ? 'desc' : 'asc'})}>品名 <i data-lucide="arrow-up-down" className="w-3 h-3 inline"></i></th>
+                                                <th className="cursor-pointer" onClick={() => setSortConfig({key: '儲位', direction: sortConfig.direction === 'asc' ? 'desc' : 'asc'})}>儲位 <i data-lucide="arrow-up-down" className="w-3 h-3 inline"></i></th>
                                                 <th>廠商</th>
-                                                <th>條碼建檔 (點擊空白掃描)</th>
+                                                <th>國際條碼 (點此掃描)</th>
                                                 <th>狀態</th>
-                                                <th className="text-right">功能</th>
+                                                <th className="text-right">操作</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -249,27 +320,22 @@
                                                         {m.條碼 ? (
                                                             <div className="flex items-center gap-2 group">
                                                                 <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-1 rounded">{m.條碼}</span>
-                                                                <button onClick={() => {setBindingTarget(m); startScanner(val => handleSave({...m, 條碼: val}));}} className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-emerald-500"><i data-lucide="camera" className="w-3 h-3"></i></button>
+                                                                <button onClick={() => {setBindingTarget(m); startScanner(val => handleSave({...m, 條碼: val}));}} className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-emerald-500 transition"><i data-lucide="camera" className="w-3 h-3"></i></button>
                                                             </div>
                                                         ) : (
-                                                            <button 
-                                                                onClick={() => {setBindingTarget(m); startScanner(val => {handleSave({...m, 條碼: val}); speak("綁定成功");});}}
+                                                            <button onClick={() => {setBindingTarget(m); startScanner(val => {handleSave({...m, 條碼: val}); speak("綁定成功");});}}
                                                                 className="flex items-center gap-1 text-[10px] font-black bg-orange-100 text-orange-600 px-3 py-1.5 rounded-full hover:bg-orange-200 transition active:scale-95"
-                                                            >
-                                                                <i data-lucide="scan" className="w-3 h-3"></i> 點此掃描綁定
-                                                            </button>
+                                                            ><i data-lucide="scan" className="w-3 h-3"></i> 掃描綁定</button>
                                                         )}
                                                     </td>
                                                     <td>
-                                                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${m.狀態 === '正常' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-400'}`}>
+                                                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold shadow-sm ${getStatusColor(m.狀態)}`}>
                                                             {m.狀態 || '正常'}
                                                         </span>
                                                     </td>
-                                                    <td className="text-right">
-                                                        <div className="flex justify-end gap-1">
-                                                            <button onClick={() => setIsEditing(m)} className="p-2 text-slate-300 hover:text-blue-500"><i data-lucide="edit-2" className="w-4 h-4"></i></button>
-                                                            <button onClick={() => handleDelete(m.id)} className="p-2 text-slate-300 hover:text-red-500"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
-                                                        </div>
+                                                    <td className="text-right flex justify-end gap-1">
+                                                        <button onClick={() => setIsEditing(m)} className="p-2 text-slate-300 hover:text-blue-500 transition"><i data-lucide="edit-2" className="w-4 h-4"></i></button>
+                                                        <button onClick={() => handleDelete(m.id)} className="p-2 text-slate-300 hover:text-red-500 transition"><i data-lucide="trash-2" className="w-4 h-4"></i></button>
                                                     </td>
                                                 </tr>
                                             ))}
@@ -282,17 +348,17 @@
 
                     {/* 相機 Modal */}
                     {isScannerOpen && (
-                        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-6 bg-black/95">
+                        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-6 bg-black/95 animate-in fade-in">
                             <div className="text-white mb-6 text-center">
-                                <div className="text-xl font-black text-emerald-400 mb-1">{bindingTarget ? `正在綁定：${bindingTarget.品名}` : '找儲位中...'}</div>
-                                <div className="text-sm opacity-70">請對準條碼</div>
+                                <div className="text-xl font-black text-emerald-400 mb-1">{bindingTarget ? `綁定中：${bindingTarget.品名}` : '找儲位中...'}</div>
+                                <div className="text-sm opacity-70">請對準瓶身條碼</div>
                             </div>
                             <div id="reader" className="w-full max-w-sm rounded-3xl overflow-hidden bg-white border-4 border-emerald-500 shadow-2xl scanner-container"></div>
                             <button onClick={stopScanner} className="mt-12 bg-white text-slate-900 px-10 py-4 rounded-full font-black text-lg shadow-lg active:scale-95 transition">關閉鏡頭</button>
                         </div>
                     )}
 
-                    {/* 編輯 Modal */}
+                    {/* 編輯/新增 Modal */}
                     {(isEditing || isAdding) && (
                         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
                             <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl animate-in slide-in-from-bottom-8">
@@ -301,19 +367,26 @@
                                     <button onClick={() => { setIsEditing(null); setIsAdding(false); }} className="text-slate-400 p-2"><i data-lucide="x" className="w-6 h-6"></i></button>
                                 </div>
                                 <div className="space-y-4">
-                                    <div><label className="text-[10px] font-black text-slate-400 ml-1 uppercase">藥品名稱</label><input id="f-name" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500" defaultValue={isEditing?.品名 || ''} /></div>
+                                    <div><label className="text-[10px] font-black text-slate-400 ml-1">藥品名稱</label><input id="f-name" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500" defaultValue={isEditing?.品名 || ''} /></div>
                                     <div className="grid grid-cols-2 gap-3">
-                                        <div><label className="text-[10px] font-black text-slate-400 ml-1 uppercase">儲位</label><input id="f-loc" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500" defaultValue={isEditing?.儲位 || ''} /></div>
-                                        <div><label className="text-[10px] font-black text-slate-400 ml-1 uppercase">代碼</label><input id="f-code" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500" defaultValue={isEditing?.代碼 || ''} /></div>
+                                        <div><label className="text-[10px] font-black text-slate-400 ml-1">儲位</label><input id="f-loc" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500" defaultValue={isEditing?.儲位 || ''} /></div>
+                                        <div><label className="text-[10px] font-black text-slate-400 ml-1">代碼</label><input id="f-code" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500" defaultValue={isEditing?.代碼 || ''} /></div>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
-                                        <div><label className="text-[10px] font-black text-slate-400 ml-1 uppercase">廠商</label><input id="f-vendor" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500" defaultValue={isEditing?.廠商 || ''} /></div>
-                                        <div><label className="text-[10px] font-black text-slate-400 ml-1 uppercase">狀態</label><input id="f-status" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500" defaultValue={isEditing?.狀態 || '正常'} /></div>
+                                        <div><label className="text-[10px] font-black text-slate-400 ml-1">廠商</label><input id="f-vendor" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500" defaultValue={isEditing?.廠商 || ''} /></div>
+                                        <div>
+                                            <label className="text-[10px] font-black text-slate-400 ml-1">狀態</label>
+                                            <select id="f-status" className="w-full p-3" defaultValue={isEditing?.狀態 || '正常'}>
+                                                <option value="正常">正常</option>
+                                                <option value="缺貨中">缺貨中</option>
+                                                <option value="暫代">暫代</option>
+                                                <option value="DC">DC</option>
+                                            </select>
+                                        </div>
                                     </div>
-                                    <div><label className="text-[10px] font-black text-slate-400 ml-1 uppercase">國際條碼</label><input id="f-barcode" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500 font-mono" defaultValue={isEditing?.條碼 || ''} /></div>
+                                    <div><label className="text-[10px] font-black text-slate-400 ml-1">國際條碼</label><input id="f-barcode" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500 font-mono" defaultValue={isEditing?.條碼 || ''} /></div>
                                 </div>
-                                <button 
-                                    onClick={() => handleSave({
+                                <button onClick={() => handleSave({
                                         id: isEditing?.id,
                                         品名: document.getElementById('f-name').value,
                                         儲位: document.getElementById('f-loc').value,

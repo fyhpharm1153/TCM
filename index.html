@@ -21,20 +21,30 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
         body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; }
-        .tab-active { @apply bg-emerald-600 text-white shadow-md scale-105; }
-        .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 1rem; }
-        table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 900px; }
-        th { @apply bg-slate-50 text-slate-500 font-bold p-4 text-left text-xs uppercase tracking-wider sticky top-0 z-10 border-b border-slate-200; }
-        td { @apply p-4 text-sm border-b border-slate-100 bg-white transition-colors; }
-        tr:last-child td { border-b: none; }
-        tr:hover td { @apply bg-emerald-50/30; }
-        .scanner-container video { border-radius: 1.5rem; }
+        .tab-active { @apply bg-emerald-600 text-white shadow-xl scale-105; }
+        .table-container { 
+            overflow-x: auto; 
+            -webkit-overflow-scrolling: touch; 
+            @apply rounded-2xl shadow-inner bg-slate-50;
+        }
+        table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 950px; }
+        th { 
+            @apply bg-slate-200/80 backdrop-blur-sm text-slate-600 font-black p-4 text-left text-xs uppercase tracking-widest sticky top-0 z-10 border-b border-slate-300;
+        }
+        td { @apply p-4 text-sm border-b border-slate-100 bg-white transition-all duration-200; }
+        tr:hover td { @apply bg-emerald-50/50; }
+        .scanner-container video { border-radius: 2rem; }
+        /* Scrollbar styling */
+        .table-container::-webkit-scrollbar { height: 6px; }
+        .table-container::-webkit-scrollbar-track { background: #f1f1f1; }
+        .table-container::-webkit-scrollbar-thumb { background: #ddd; border-radius: 10px; }
     </style>
 </head>
-<body class="bg-slate-100">
+<body class="bg-slate-50 text-slate-800">
     <div id="root">
-        <div class="flex items-center justify-center min-h-screen">
-            <div class="animate-pulse text-emerald-600 font-bold">系統啟動中...</div>
+        <div class="flex flex-col items-center justify-center min-h-screen">
+            <div class="w-12 h-12 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin mb-4"></div>
+            <div class="text-emerald-600 font-black tracking-widest animate-pulse">系統數據同步中...</div>
         </div>
     </div>
 
@@ -84,10 +94,7 @@
                         setUser(u);
                         setOnlineStatus('online');
                     } else {
-                        auth.signInAnonymously().catch(err => {
-                            console.error("登入失敗", err);
-                            setOnlineStatus('offline');
-                        });
+                        auth.signInAnonymously().catch(() => setOnlineStatus('offline'));
                     }
                 });
                 return () => unsubscribeAuth();
@@ -98,10 +105,7 @@
                 const unsubscribeData = getMedicineRef().onSnapshot((snapshot) => {
                     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                     setMedicines(data);
-                }, (error) => {
-                    console.error("讀取失敗 (請檢查 Firebase 規則):", error);
-                    setOnlineStatus('error');
-                });
+                }, () => setOnlineStatus('error'));
                 return () => unsubscribeData();
             }, [user]);
 
@@ -125,7 +129,7 @@
                     setIsAdding(false);
                     setIsEditing(null);
                 } catch (err) { 
-                    alert("儲存失敗：您可能未在 Firebase 開放讀寫規則。"); 
+                    alert("儲存失敗：請確認 Firestore 規則已發佈。"); 
                 }
             };
 
@@ -135,7 +139,7 @@
             };
 
             const handleExport = () => {
-                if (medicines.length === 0) { alert("目前沒有資料。"); return; }
+                if (medicines.length === 0) return;
                 const exportData = medicines.map(m => ({
                     '代碼': m.代碼 || '',
                     '品名': m.品名 || '',
@@ -180,7 +184,7 @@
                             }
                         }
                         await batch.commit();
-                        alert(`成功同步 ${count} 筆資料至雲端！`);
+                        alert(`成功同步 ${count} 筆資料！`);
                     } catch (err) { alert("匯入失敗：" + err.message); }
                     finally { setIsLoading(false); e.target.value = null; }
                 };
@@ -193,13 +197,13 @@
                     html5QrCode.current = new Html5Qrcode("reader");
                     html5QrCode.current.start(
                         { facingMode: "environment" }, 
-                        { fps: 15, qrbox: { width: 260, height: 160 } }, 
+                        { fps: 20, qrbox: { width: 280, height: 160 } }, 
                         (decodedText) => {
                             stopScanner();
                             callback(decodedText);
                         }
                     ).catch(() => {
-                        alert("無法存取相機，請確認瀏覽器權限或使用 HTTPS。");
+                        alert("無法存取相機，請確認權限或使用 HTTPS。");
                         setIsScannerOpen(false);
                     });
                 }, 300);
@@ -226,7 +230,8 @@
                 let filtered = medicines.filter(m => 
                     (m.品名 || '').toLowerCase().includes(listSearchTerm.toLowerCase()) || 
                     (m.儲位 || '').toLowerCase().includes(listSearchTerm.toLowerCase()) ||
-                    (m.代碼 || '').toLowerCase().includes(listSearchTerm.toLowerCase())
+                    (m.代碼 || '').toLowerCase().includes(listSearchTerm.toLowerCase()) ||
+                    (m.廠商 || '').toLowerCase().includes(listSearchTerm.toLowerCase())
                 );
                 filtered.sort((a, b) => {
                     const valA = String(a[sortConfig.key] || '');
@@ -239,40 +244,49 @@
             const getStatusBadge = (status) => {
                 const colors = {
                     '正常': 'bg-emerald-100 text-emerald-700 border-emerald-200',
-                    '缺貨中': 'bg-red-100 text-red-700 border-red-200',
-                    '暫代': 'bg-blue-100 text-blue-700 border-blue-200',
+                    '缺貨中': 'bg-rose-100 text-rose-700 border-rose-200',
+                    '暫代': 'bg-sky-100 text-sky-700 border-sky-200',
                     'DC': 'bg-slate-200 text-slate-600 border-slate-300'
                 };
                 return (
-                    <span className={`px-3 py-1 rounded-full text-[11px] font-bold border ${colors[status] || 'bg-slate-100 text-slate-500'}`}>
+                    <span className={`px-4 py-1 rounded-full text-[11px] font-black border-2 shadow-sm uppercase tracking-tighter ${colors[status] || 'bg-slate-100 text-slate-500'}`}>
                         {status || '正常'}
                     </span>
                 );
             };
 
             return (
-                <div className="min-h-screen flex flex-col">
-                    <header className="bg-gradient-to-r from-emerald-700 to-emerald-900 text-white p-4 shadow-xl flex justify-between items-center relative overflow-hidden">
-                        <div className="flex items-center gap-3 z-10">
-                            <div className={`w-3 h-3 rounded-full animate-pulse ${onlineStatus === 'online' ? 'bg-emerald-400' : 'bg-red-400'}`} title={onlineStatus}></div>
-                            <h1 className="text-xl font-black tracking-tight flex items-center gap-2">
-                                <i data-lucide="activity"></i> 豐醫中藥管理
-                            </h1>
+                <div className="min-h-screen flex flex-col max-w-full overflow-x-hidden">
+                    {/* Header */}
+                    <header className="bg-gradient-to-br from-emerald-800 via-emerald-900 to-slate-900 text-white px-6 py-6 shadow-2xl flex justify-between items-center relative overflow-hidden">
+                        <div className="flex items-center gap-4 z-10">
+                            <div className="relative">
+                                <div className={`w-4 h-4 rounded-full border-2 border-white/20 ${onlineStatus === 'online' ? 'bg-emerald-400' : 'bg-rose-400 animate-pulse'}`}></div>
+                                {onlineStatus === 'online' && <div className="absolute inset-0 bg-emerald-400 rounded-full animate-ping opacity-30"></div>}
+                            </div>
+                            <div>
+                                <h1 className="text-2xl font-black tracking-tight flex items-center gap-2">
+                                    <i data-lucide="cross"></i> 豐醫中藥儲位
+                                </h1>
+                                <p className="text-[10px] font-bold text-emerald-400/80 tracking-[0.2em] uppercase">Cloud Integrated System</p>
+                            </div>
                         </div>
                         <div className="z-10 text-right">
-                            <div className="text-[10px] opacity-70 uppercase font-bold tracking-widest">Database Sync</div>
-                            <div className="text-sm font-bold">{medicines.length} Items</div>
+                            <div className="text-3xl font-black leading-none">{medicines.length}</div>
+                            <div className="text-[9px] font-black opacity-50 uppercase tracking-widest mt-1">Total Items</div>
                         </div>
-                        <div className="absolute top-0 right-0 -mr-8 -mt-8 w-32 h-32 bg-white/10 rounded-full blur-3xl"></div>
+                        <div className="absolute -top-10 -right-10 w-48 h-48 bg-emerald-500/10 rounded-full blur-3xl"></div>
+                        <div className="absolute -bottom-10 -left-10 w-48 h-48 bg-white/5 rounded-full blur-2xl"></div>
                     </header>
 
-                    <nav className="flex bg-white border-b sticky top-0 z-40 p-2 gap-2 shadow-sm">
+                    {/* Navigation */}
+                    <nav className="flex bg-white/80 backdrop-blur-md border-b sticky top-0 z-40 p-2 gap-2 shadow-lg">
                         {[
-                            { id: 'search', label: '找儲位', icon: 'search' },
-                            { id: 'inventory', label: '品項表', icon: 'table-properties' }
+                            { id: 'search', label: '快捷查詢', icon: 'zap' },
+                            { id: 'inventory', label: '品項總表', icon: 'layout-grid' }
                         ].map(t => (
                             <button key={t.id} onClick={() => setActiveTab(t.id)}
-                                className={`flex-1 py-3 rounded-xl flex items-center justify-center gap-2 transition-all duration-300 font-bold ${activeTab === t.id ? 'tab-active' : 'text-slate-400 hover:bg-slate-50'}`}
+                                className={`flex-1 py-4 rounded-2xl flex items-center justify-center gap-3 transition-all duration-500 font-black tracking-wider ${activeTab === t.id ? 'tab-active' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'}`}
                             >
                                 <i data-lucide={t.icon} className="w-5 h-5"></i>
                                 <span className="text-sm">{t.label}</span>
@@ -280,37 +294,38 @@
                         ))}
                     </nav>
 
-                    <main className="flex-1 p-4 w-full">
+                    <main className="flex-1 p-4 md:p-8 w-full max-w-7xl mx-auto">
+                        {/* Tab: SEARCH */}
                         {activeTab === 'search' && (
-                            <div className="space-y-6 animate-in fade-in max-w-2xl mx-auto">
-                                <button onClick={() => startScanner(handleSearch)} className="w-full bg-emerald-600 text-white py-8 rounded-3xl font-black text-2xl flex flex-col items-center justify-center gap-2 shadow-2xl active:scale-95 transition-all ring-4 ring-emerald-100">
-                                    <i data-lucide="scan-barcode" className="w-12 h-12"></i>
+                            <div className="space-y-8 animate-in fade-in max-w-2xl mx-auto py-4">
+                                <button onClick={() => startScanner(handleSearch)} className="w-full bg-emerald-600 text-white py-10 rounded-[3rem] font-black text-3xl flex flex-col items-center justify-center gap-4 shadow-[0_20px_50px_rgba(16,185,129,0.3)] hover:shadow-emerald-400/40 active:scale-95 transition-all duration-300 ring-8 ring-emerald-50">
+                                    <i data-lucide="maximize" className="w-16 h-16 opacity-50"></i>
                                     <span>開啟掃描槍</span>
                                 </button>
                                 
                                 <div className="relative group">
-                                    <input type="text" placeholder="手動搜尋代碼、名稱或條碼..."
-                                        className="w-full pl-14 pr-6 py-5 bg-white border-2 border-slate-200 rounded-2xl text-xl outline-none focus:border-emerald-500 shadow-lg focus:ring-4 focus:ring-emerald-50 transition-all"
+                                    <input type="text" placeholder="手動搜尋：代碼、名稱、條碼"
+                                        className="w-full pl-16 pr-8 py-6 bg-white border-4 border-slate-100 rounded-[2rem] text-2xl outline-none focus:border-emerald-500 shadow-xl focus:ring-8 focus:ring-emerald-50 transition-all font-bold placeholder:text-slate-300"
                                         value={searchTerm} onChange={(e) => handleSearch(e.target.value)}
                                     />
-                                    <i data-lucide="search" className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-emerald-500 transition-colors w-6 h-6"></i>
+                                    <i data-lucide="search" className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-emerald-500 transition-colors w-8 h-8"></i>
                                 </div>
 
                                 {scanResult && (
-                                    <div className="bg-white p-8 rounded-[2.5rem] border-b-8 border-emerald-600 shadow-2xl text-center space-y-6 animate-in slide-in-from-bottom-10 duration-500">
-                                        <div className="flex justify-center gap-2">
-                                            <span className="px-3 py-1 bg-slate-100 text-slate-500 text-xs font-bold rounded-lg uppercase tracking-wider">{scanResult.廠商}</span>
-                                            <span className="px-3 py-1 bg-slate-100 text-slate-500 text-xs font-bold rounded-lg">{scanResult.代碼}</span>
+                                    <div className="bg-white p-10 rounded-[3.5rem] border-b-[12px] border-emerald-600 shadow-2xl text-center space-y-8 animate-in slide-in-from-bottom-12 duration-700">
+                                        <div className="flex justify-center gap-3">
+                                            <span className="px-4 py-1.5 bg-emerald-50 text-emerald-700 text-xs font-black rounded-xl tracking-widest">{scanResult.廠商}</span>
+                                            <span className="px-4 py-1.5 bg-slate-50 text-slate-500 text-xs font-black rounded-xl">{scanResult.代碼}</span>
                                         </div>
                                         <div className="text-4xl font-black text-slate-800 leading-tight px-4">{scanResult.品名}</div>
-                                        <div className="py-6 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200 relative">
-                                            <div className="text-9xl font-black text-emerald-600 tracking-tighter">{scanResult.儲位}</div>
-                                            <div className="absolute top-2 right-4 text-[10px] font-bold text-slate-300 uppercase">Storage Loc</div>
+                                        <div className="py-8 bg-slate-50 rounded-[2.5rem] border-2 border-dashed border-slate-200 relative">
+                                            <div className="text-9xl font-black text-emerald-600 tracking-tighter leading-none">{scanResult.儲位}</div>
+                                            <div className="mt-2 text-[10px] font-black text-slate-300 uppercase tracking-widest">Storage Location</div>
                                         </div>
-                                        <div className="flex flex-col items-center gap-4">
+                                        <div className="flex flex-col items-center gap-6">
                                             {getStatusBadge(scanResult.狀態)}
-                                            <button onClick={() => speak(scanResult.儲位)} className="bg-emerald-600 text-white p-6 rounded-full inline-flex active:scale-90 shadow-lg hover:shadow-emerald-200 transition-all">
-                                                <i data-lucide="volume-2" className="w-12 h-12"></i>
+                                            <button onClick={() => speak(scanResult.儲位)} className="bg-emerald-600 text-white p-8 rounded-full inline-flex active:scale-90 shadow-2xl hover:shadow-emerald-200 transition-all">
+                                                <i data-lucide="volume-2" className="w-14 h-14"></i>
                                             </button>
                                         </div>
                                     </div>
@@ -318,24 +333,25 @@
                             </div>
                         )}
 
+                        {/* Tab: INVENTORY */}
                         {activeTab === 'inventory' && (
-                            <div className="space-y-4 animate-in fade-in">
-                                <div className="bg-white p-4 rounded-2xl shadow-xl border border-slate-100 flex flex-wrap gap-3 items-center">
-                                    <button onClick={() => setIsAdding(true)} className="bg-emerald-600 text-white px-5 py-3 rounded-xl font-black flex items-center gap-2 shadow-lg active:scale-95 transition-all"><i data-lucide="plus-circle"></i> 新增品項</button>
-                                    <label className="bg-slate-800 text-white px-5 py-3 rounded-xl font-black flex items-center gap-2 shadow-lg active:scale-95 transition-all cursor-pointer">
+                            <div className="space-y-6 animate-in fade-in">
+                                <div className="bg-white p-5 rounded-3xl shadow-xl border border-slate-100 flex flex-wrap gap-4 items-center">
+                                    <button onClick={() => setIsAdding(true)} className="bg-emerald-600 text-white px-6 py-4 rounded-2xl font-black flex items-center gap-2 shadow-lg active:scale-95 transition-all"><i data-lucide="plus-circle"></i> 新增品項</button>
+                                    <label className="bg-slate-800 text-white px-6 py-4 rounded-2xl font-black flex items-center gap-2 shadow-lg active:scale-95 transition-all cursor-pointer">
                                         <i data-lucide="file-up"></i> 匯入 Excel
                                         <input type="file" className="hidden" accept=".xlsx,.csv" onChange={handleImport} disabled={isLoading} />
                                     </label>
-                                    <button onClick={handleExport} className="bg-blue-600 text-white px-5 py-3 rounded-xl font-black flex items-center gap-2 shadow-lg active:scale-95 transition-all"><i data-lucide="file-output"></i> 匯出 Excel</button>
-                                    <div className="flex-1 relative min-w-[280px]">
-                                        <input type="text" placeholder="關鍵字快速過濾..." className="w-full pl-12 pr-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl outline-none focus:border-emerald-500 transition-all" onChange={(e) => setListSearchTerm(e.target.value)} />
-                                        <i data-lucide="filter" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5"></i>
+                                    <button onClick={handleExport} className="bg-blue-600 text-white px-6 py-4 rounded-2xl font-black flex items-center gap-2 shadow-lg active:scale-95 transition-all"><i data-lucide="file-output"></i> 匯出 Excel</button>
+                                    <div className="flex-1 relative min-w-[300px]">
+                                        <input type="text" placeholder="關鍵字快速過濾總表..." className="w-full pl-14 pr-4 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-emerald-500 transition-all font-bold" onChange={(e) => setListSearchTerm(e.target.value)} />
+                                        <i data-lucide="filter" className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 w-6 h-6"></i>
                                     </div>
                                 </div>
 
                                 {isLoading && <div className="p-4 bg-emerald-50 text-emerald-600 text-center rounded-2xl animate-pulse font-black shadow-inner">正在同步資料庫數據...</div>}
 
-                                <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 table-container">
+                                <div className="bg-white rounded-[2rem] shadow-2xl border border-slate-200 table-container">
                                     <table className="overflow-hidden">
                                         <thead>
                                             <tr>
@@ -343,7 +359,7 @@
                                                 <th onClick={() => setSortConfig({key: '品名', direction: sortConfig.direction === 'asc' ? 'desc' : 'asc'})} className="cursor-pointer hover:text-emerald-600 transition-colors">品名</th>
                                                 <th onClick={() => setSortConfig({key: '儲位', direction: sortConfig.direction === 'asc' ? 'desc' : 'asc'})} className="cursor-pointer hover:text-emerald-600 transition-colors">儲位</th>
                                                 <th>廠商</th>
-                                                <th className="min-w-[180px]">條碼建檔</th>
+                                                <th className="min-w-[200px]">條碼建檔</th>
                                                 <th>狀態</th>
                                                 <th className="text-right">功能</th>
                                             </tr>
@@ -351,20 +367,20 @@
                                         <tbody>
                                             {getSortedItems().length > 0 ? getSortedItems().map(m => (
                                                 <tr key={m.id}>
-                                                    <td className="font-mono text-[11px] text-slate-400 font-bold">{m.代碼}</td>
-                                                    <td className="font-bold text-slate-800 text-base">{m.品名}</td>
-                                                    <td><span className="font-black text-emerald-600 text-lg bg-emerald-50 px-3 py-1 rounded-lg">{m.儲位}</span></td>
-                                                    <td className="text-slate-500 font-medium">{m.廠商}</td>
+                                                    <td className="font-mono text-[11px] text-slate-400 font-black">{m.代碼}</td>
+                                                    <td className="font-black text-slate-800 text-base">{m.品名}</td>
+                                                    <td><span className="font-black text-emerald-600 text-xl bg-emerald-50 px-4 py-1.5 rounded-xl border border-emerald-100 shadow-sm">{m.儲位}</span></td>
+                                                    <td className="text-slate-500 font-bold text-xs">{m.廠商}</td>
                                                     <td>
                                                         {m.條碼 ? (
                                                             <div className="flex items-center gap-2 group">
-                                                                <span className="font-mono text-xs text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 shadow-sm">{m.條碼}</span>
-                                                                <button onClick={() => {setBindingTarget(m); startScanner(val => handleSave({...m, 條碼: val}));}} className="opacity-0 group-hover:opacity-100 p-2 bg-white shadow-md border rounded-full text-slate-400 hover:text-emerald-500 transition-all"><i data-lucide="refresh-cw" className="w-4 h-4"></i></button>
+                                                                <span className="font-mono text-xs text-blue-600 bg-blue-50 px-4 py-2 rounded-xl border border-blue-100 shadow-inner">{m.條碼}</span>
+                                                                <button onClick={() => {setBindingTarget(m); startScanner(val => handleSave({...m, 條碼: val}));}} className="opacity-0 group-hover:opacity-100 p-2.5 bg-white shadow-xl border rounded-full text-slate-400 hover:text-emerald-500 transition-all hover:rotate-180"><i data-lucide="refresh-cw" className="w-4 h-4"></i></button>
                                                             </div>
                                                         ) : (
                                                             <button 
                                                                 onClick={() => {setBindingTarget(m); startScanner(val => {handleSave({...m, 條碼: val}); speak("綁定成功");});}}
-                                                                className="flex items-center gap-2 text-[10px] font-black bg-orange-500 text-white px-4 py-2 rounded-xl hover:bg-orange-600 transition-all active:scale-95 shadow-md shadow-orange-100"
+                                                                className="flex items-center gap-2 text-[11px] font-black bg-gradient-to-r from-orange-500 to-amber-500 text-white px-5 py-2.5 rounded-2xl hover:scale-105 transition-all active:scale-95 shadow-lg shadow-orange-100"
                                                             >
                                                                 <i data-lucide="camera" className="w-4 h-4"></i> 掃描綁定
                                                             </button>
@@ -373,13 +389,13 @@
                                                     <td>{getStatusBadge(m.狀態)}</td>
                                                     <td className="text-right">
                                                         <div className="flex justify-end gap-2">
-                                                            <button onClick={() => setIsEditing(m)} className="p-3 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"><i data-lucide="edit-3" className="w-5 h-5"></i></button>
-                                                            <button onClick={() => handleDelete(m.id)} className="p-3 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"><i data-lucide="trash-2" className="w-5 h-5"></i></button>
+                                                            <button onClick={() => setIsEditing(m)} className="p-3 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-2xl transition-all"><i data-lucide="edit-3" className="w-5 h-5"></i></button>
+                                                            <button onClick={() => handleDelete(m.id)} className="p-3 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-2xl transition-all"><i data-lucide="trash-2" className="w-5 h-5"></i></button>
                                                         </div>
                                                     </td>
                                                 </tr>
                                             )) : (
-                                                <tr><td colSpan="7" className="text-center py-20 text-slate-300 italic text-lg">查無任何品項資料</td></tr>
+                                                <tr><td colSpan="7" className="text-center py-32 text-slate-300 italic text-xl font-bold tracking-widest">目前無任何品項資料</td></tr>
                                             )}
                                         </tbody>
                                     </table>
@@ -388,56 +404,59 @@
                         )}
                     </main>
 
-                    {/* 相機 Modal */}
+                    {/* Camera Modal */}
                     {isScannerOpen && (
-                        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-6 bg-black/95 animate-in fade-in duration-300">
-                            <div className="text-white mb-8 text-center">
-                                <div className="text-2xl font-black text-emerald-400 mb-2">{bindingTarget ? `正在綁定：${bindingTarget.品名}` : '藥品快速定位中...'}</div>
-                                <div className="text-sm opacity-60 flex items-center justify-center gap-2">
-                                    <i data-lucide="viewfinder" className="w-4 h-4 animate-spin"></i> 請對準藥瓶條碼
+                        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-6 bg-black/95 animate-in fade-in duration-500">
+                            <div className="text-white mb-10 text-center animate-bounce">
+                                <div className="text-3xl font-black text-emerald-400 mb-2 tracking-tight">{bindingTarget ? `正在綁定：${bindingTarget.品名}` : '藥品定位系統'}</div>
+                                <div className="text-sm opacity-60 flex items-center justify-center gap-3">
+                                    <div className="w-2 h-2 bg-emerald-400 rounded-full animate-ping"></div> 請對準條碼區域
                                 </div>
                             </div>
-                            <div id="reader" className="w-full max-w-sm rounded-[3rem] overflow-hidden bg-white border-[6px] border-emerald-500 shadow-[0_0_50px_rgba(16,185,129,0.5)] scanner-container"></div>
-                            <button onClick={stopScanner} className="mt-12 bg-white text-slate-900 px-12 py-5 rounded-full font-black text-xl shadow-2xl active:scale-95 transition-all">結束掃描</button>
+                            <div id="reader" className="w-full max-w-sm rounded-[3.5rem] overflow-hidden bg-white border-[8px] border-emerald-500 shadow-[0_0_80px_rgba(16,185,129,0.6)] scanner-container"></div>
+                            <button onClick={stopScanner} className="mt-16 bg-white text-slate-900 px-16 py-5 rounded-full font-black text-2xl shadow-2xl active:scale-95 transition-all">結束掃描</button>
                         </div>
                     )}
 
-                    {/* 編輯/新增 Modal */}
+                    {/* Edit/Add Modal */}
                     {(isEditing || isAdding) && (
-                        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[100] flex items-center justify-center p-4 animate-in fade-in">
-                            <div className="bg-white w-full max-w-md rounded-[2.5rem] p-8 shadow-2xl animate-in slide-in-from-bottom-12 duration-500">
-                                <div className="flex justify-between items-center mb-8">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center">
-                                            <i data-lucide={isAdding ? "plus" : "file-edit"}></i>
+                        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-xl z-[100] flex items-center justify-center p-4 animate-in fade-in">
+                            <div className="bg-white w-full max-w-lg rounded-[3rem] p-10 shadow-2xl animate-in slide-in-from-bottom-20 duration-500">
+                                <div className="flex justify-between items-center mb-10">
+                                    <div className="flex items-center gap-4">
+                                        <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-3xl flex items-center justify-center shadow-inner">
+                                            <i data-lucide={isAdding ? "plus-circle" : "edit-3"} className="w-8 h-8"></i>
                                         </div>
-                                        <h3 className="font-black text-2xl text-slate-800">{isAdding ? '新增中藥' : '編輯品項'}</h3>
+                                        <div>
+                                            <h3 className="font-black text-3xl text-slate-800">{isAdding ? '新增品項' : '編輯品項'}</h3>
+                                            <p className="text-xs font-bold text-slate-400 tracking-widest uppercase">Database Record Update</p>
+                                        </div>
                                     </div>
-                                    <button onClick={() => { setIsEditing(null); setIsAdding(false); }} className="text-slate-300 hover:text-slate-500 p-2 transition-colors"><i data-lucide="circle-x" className="w-8 h-8"></i></button>
+                                    <button onClick={() => { setIsEditing(null); setIsAdding(false); }} className="text-slate-300 hover:text-slate-600 p-3 transition-colors"><i data-lucide="circle-x" className="w-10 h-10"></i></button>
                                 </div>
-                                <div className="space-y-5">
-                                    <div className="space-y-1.5">
-                                        <label className="text-[11px] font-black text-slate-400 ml-1 uppercase tracking-widest">Medicine Name 品名</label>
-                                        <input id="f-name" className="w-full p-4 bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-2xl outline-none transition-all font-bold text-lg" defaultValue={isEditing?.品名 || ''} />
+                                <div className="space-y-6">
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-black text-slate-500 ml-2 uppercase tracking-widest">Medicine Name 品名</label>
+                                        <input id="f-name" className="w-full p-5 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-black text-xl shadow-inner" defaultValue={isEditing?.品名 || ''} />
                                     </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-1.5">
-                                            <label className="text-[11px] font-black text-slate-400 ml-1 uppercase tracking-widest">Storage 儲位</label>
-                                            <input id="f-loc" className="w-full p-4 bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-2xl outline-none transition-all font-bold" defaultValue={isEditing?.儲位 || ''} />
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-black text-slate-500 ml-2 uppercase tracking-widest">Storage 儲位</label>
+                                            <input id="f-loc" className="w-full p-5 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-black text-xl shadow-inner" defaultValue={isEditing?.儲位 || ''} />
                                         </div>
-                                        <div className="space-y-1.5">
-                                            <label className="text-[11px] font-black text-slate-400 ml-1 uppercase tracking-widest">Code 代碼</label>
-                                            <input id="f-code" className="w-full p-4 bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-2xl outline-none transition-all font-bold" defaultValue={isEditing?.代碼 || ''} />
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-black text-slate-500 ml-2 uppercase tracking-widest">Code 代碼</label>
+                                            <input id="f-code" className="w-full p-5 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-black text-xl shadow-inner" defaultValue={isEditing?.代碼 || ''} />
                                         </div>
                                     </div>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-1.5">
-                                            <label className="text-[11px] font-black text-slate-400 ml-1 uppercase tracking-widest">Vendor 廠商</label>
-                                            <input id="f-vendor" className="w-full p-4 bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-2xl outline-none transition-all font-bold" defaultValue={isEditing?.廠商 || ''} />
+                                    <div className="grid grid-cols-2 gap-6">
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-black text-slate-500 ml-2 uppercase tracking-widest">Vendor 廠商</label>
+                                            <input id="f-vendor" className="w-full p-5 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-bold shadow-inner" defaultValue={isEditing?.廠商 || ''} />
                                         </div>
-                                        <div className="space-y-1.5">
-                                            <label className="text-[11px] font-black text-slate-400 ml-1 uppercase tracking-widest">Status 狀態</label>
-                                            <select id="f-status" className="w-full p-4 font-bold" defaultValue={isEditing?.狀態 || '正常'}>
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-black text-slate-500 ml-2 uppercase tracking-widest">Status 狀態</label>
+                                            <select id="f-status" className="w-full p-5 font-black bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none shadow-inner appearance-none" defaultValue={isEditing?.狀態 || '正常'}>
                                                 <option value="正常">正常</option>
                                                 <option value="缺貨中">缺貨中</option>
                                                 <option value="暫代">暫代</option>
@@ -445,14 +464,14 @@
                                             </select>
                                         </div>
                                     </div>
-                                    <div className="space-y-1.5">
-                                        <label className="text-[11px] font-black text-slate-400 ml-1 uppercase tracking-widest">Barcode 國際條碼</label>
-                                        <div className="flex gap-2">
-                                            <input id="f-barcode" className="flex-1 p-4 bg-slate-50 border-2 border-transparent focus:border-emerald-500 rounded-2xl outline-none transition-all font-mono text-sm" defaultValue={isEditing?.條碼 || ''} />
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-black text-slate-500 ml-2 uppercase tracking-widest">Barcode 國際條碼</label>
+                                        <div className="flex gap-4">
+                                            <input id="f-barcode" className="flex-1 p-5 bg-slate-50 border-4 border-transparent focus:border-emerald-500 rounded-3xl outline-none transition-all font-mono text-base shadow-inner" defaultValue={isEditing?.條碼 || ''} />
                                             <button 
                                                 onClick={() => startScanner(val => { document.getElementById('f-barcode').value = val; })}
-                                                className="bg-slate-800 text-white p-4 rounded-2xl active:scale-90 transition-all"
-                                            ><i data-lucide="scan"></i></button>
+                                                className="bg-slate-900 text-white px-6 rounded-3xl active:scale-90 transition-all shadow-xl"
+                                            ><i data-lucide="maximize"></i></button>
                                         </div>
                                     </div>
                                 </div>
@@ -465,8 +484,8 @@
                                         條碼: document.getElementById('f-barcode').value,
                                         狀態: document.getElementById('f-status').value,
                                     })}
-                                    className="w-full py-5 bg-emerald-600 text-white rounded-[1.5rem] font-black text-xl mt-10 shadow-xl shadow-emerald-100 hover:bg-emerald-700 active:scale-95 transition-all"
-                                >確認並儲存</button>
+                                    className="w-full py-6 bg-emerald-600 text-white rounded-[2.5rem] font-black text-2xl mt-12 shadow-[0_15px_40px_rgba(16,185,129,0.3)] hover:bg-emerald-700 active:scale-95 transition-all"
+                                >確認並發佈至雲端</button>
                             </div>
                         </div>
                     )}

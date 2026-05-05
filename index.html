@@ -20,13 +20,12 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap');
-        body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; }
+        body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; transition: font-size 0.2s ease; }
         .tab-active { @apply bg-emerald-600 text-white shadow-lg; }
         .table-container { 
             overflow-x: auto; 
             @apply rounded-xl shadow-inner bg-slate-50;
         }
-        /* 表格寬度隨內容自動調整 */
         table { border-collapse: separate; border-spacing: 0; width: 100%; table-layout: auto; }
         th { 
             @apply bg-slate-100 text-slate-500 font-bold p-3 text-left text-xs uppercase tracking-wider sticky top-0 z-10 border-b border-slate-200 whitespace-nowrap select-none cursor-pointer hover:bg-slate-200 transition-colors;
@@ -40,12 +39,12 @@
     <div id="root">
         <div class="flex flex-col items-center justify-center min-h-screen text-emerald-600 font-bold">
             <div class="w-8 h-8 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin mb-2"></div>
-            系統連線中...
+            系統載入中...
         </div>
     </div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect, useRef, useMemo } = React;
 
         // --- Firebase 設定 ---
         const firebaseConfig = {
@@ -79,6 +78,8 @@
             const [isEditing, setIsEditing] = useState(null);
             const [isAdding, setIsAdding] = useState(false);
             const [isLoading, setIsLoading] = useState(false);
+            // 字體大小狀態 (預設 16px)
+            const [fontSize, setFontSize] = useState(16);
 
             const html5QrCode = useRef(null);
             const autoClearTimer = useRef(null);
@@ -107,7 +108,7 @@
                     autoClearTimer.current = setTimeout(() => {
                         setSearchTerm('');
                         setScanMatch(null);
-                    }, 5000); // 修改為 5000ms
+                    }, 5000);
                 }
                 return () => {
                     if (autoClearTimer.current) clearTimeout(autoClearTimer.current);
@@ -234,35 +235,45 @@
                 const term = searchTerm.toLowerCase().replace(/\*/g, '');
                 if (!term) return [];
                 return medicines.filter(m => 
-                    (m.品名 || '').toLowerCase().includes(term) ||
-                    (m.代碼 || '').toLowerCase().includes(term) ||
-                    (m.儲位 || '').toLowerCase().includes(term) ||
-                    (m.條碼 || '').includes(term)
+                    String(m.品名 || '').toLowerCase().includes(term) ||
+                    String(m.代碼 || '').toLowerCase().includes(term) ||
+                    String(m.儲位 || '').toLowerCase().includes(term) ||
+                    String(m.條碼 || '').includes(term)
                 ).slice(0, 15);
             };
 
-            const getSortedInventory = () => {
+            // --- 修復過的排序邏輯 (穩定且不空白) ---
+            const sortedInventory = useMemo(() => {
                 const term = listSearchTerm.toLowerCase();
                 let filtered = medicines.filter(m => 
-                    (m.品名 || '').toLowerCase().includes(term) || 
-                    (m.代碼 || '').toLowerCase().includes(term) ||
-                    (m.儲位 || '').toLowerCase().includes(term) ||
-                    (m.廠商 || '').toLowerCase().includes(term) ||
-                    (m.條碼 || '').includes(term)
+                    String(m.品名 || '').toLowerCase().includes(term) || 
+                    String(m.代碼 || '').toLowerCase().includes(term) ||
+                    String(m.儲位 || '').toLowerCase().includes(term) ||
+                    String(m.廠商 || '').toLowerCase().includes(term) ||
+                    String(m.條碼 || '').toLowerCase().includes(term) ||
+                    String(m.狀態 || '').toLowerCase().includes(term)
                 );
-                filtered.sort((a, b) => {
+
+                if (!sortConfig.key) return filtered;
+
+                return filtered.sort((a, b) => {
+                    // 安全取值，確保一定是字串
                     const valA = String(a[sortConfig.key] || '');
                     const valB = String(b[sortConfig.key] || '');
-                    return sortConfig.direction === 'asc' ? valA.localeCompare(valB, 'zh-TW') : valB.localeCompare(valA, 'zh-TW');
+                    
+                    if (sortConfig.direction === 'asc') {
+                        return valA.localeCompare(valB, 'zh-TW', { numeric: true });
+                    } else {
+                        return valB.localeCompare(valA, 'zh-TW', { numeric: true });
+                    }
                 });
-                return filtered;
-            };
+            }, [medicines, listSearchTerm, sortConfig]);
 
             const toggleSort = (key) => {
-                setSortConfig({
+                setSortConfig(prev => ({
                     key,
-                    direction: sortConfig.key === key && sortConfig.direction === 'asc' ? 'desc' : 'asc'
-                });
+                    direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
+                }));
             };
 
             const getStatusColor = (status) => {
@@ -283,16 +294,24 @@
             };
 
             return (
-                <div className="min-h-screen flex flex-col">
-                    <header className="bg-emerald-800 text-white p-4 shadow-lg flex justify-between items-center">
+                <div className="min-h-screen flex flex-col" style={{ fontSize: `${fontSize}px` }}>
+                    {/* Header with Font Control */}
+                    <header className="bg-emerald-800 text-white p-4 shadow-lg flex justify-between items-center sticky top-0 z-[60]">
                         <div className="flex items-center gap-2">
                             <i data-lucide="database" className="w-5 h-5"></i>
                             <h1 className="text-lg font-bold">豐醫中藥管理</h1>
                         </div>
-                        <div className="text-xs opacity-75">{medicines.length} 項目</div>
+                        <div className="flex items-center gap-3">
+                            <div className="flex bg-white/10 rounded-lg p-1 gap-1">
+                                <button onClick={() => setFontSize(f => Math.min(f + 2, 24))} className="px-2 py-1 text-xs font-bold hover:bg-white/20 rounded">A+</button>
+                                <button onClick={() => setFontSize(f => Math.max(f - 2, 12))} className="px-2 py-1 text-xs font-bold hover:bg-white/20 rounded">A-</button>
+                                <button onClick={() => setFontSize(16)} className="px-2 py-1 text-[10px] hover:bg-white/20 rounded">重置</button>
+                            </div>
+                            <div className="text-xs opacity-75">{medicines.length} 項目</div>
+                        </div>
                     </header>
 
-                    <nav className="flex bg-white border-b sticky top-0 z-40 p-1 gap-1 shadow-sm">
+                    <nav className="flex bg-white border-b sticky top-[60px] z-40 p-1 gap-1 shadow-sm">
                         {[
                             { id: 'search', label: '快捷查詢', icon: 'zap' },
                             { id: 'inventory', label: '品項總表', icon: 'table' }
@@ -307,7 +326,6 @@
                     </nav>
 
                     <main className="flex-1 p-3 w-full max-w-4xl mx-auto">
-                        {/* Tab: 快捷查詢 */}
                         {activeTab === 'search' && (
                             <div className="space-y-4 animate-in fade-in">
                                 <button onClick={() => startScanner(handleSearchChange)} className="w-full bg-emerald-600 text-white py-6 rounded-2xl font-bold text-xl flex items-center justify-center gap-3 shadow-lg active:scale-95 transition">
@@ -367,7 +385,6 @@
                             </div>
                         )}
 
-                        {/* Tab: 品項總表 */}
                         {activeTab === 'inventory' && (
                             <div className="space-y-4 animate-in fade-in">
                                 <div className="bg-white p-4 rounded-2xl border shadow-sm flex flex-wrap gap-2 items-center">
@@ -378,7 +395,7 @@
                                         <input type="file" className="hidden" accept=".xlsx,.csv" onChange={handleImport} disabled={isLoading} />
                                     </label>
                                     <div className="flex-1 min-w-[200px] relative">
-                                        <input type="text" placeholder="快速過濾..." className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500 text-sm" onChange={(e) => setListSearchTerm(e.target.value)} />
+                                        <input type="text" placeholder="快速過濾清單..." className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500 text-sm" onChange={(e) => setListSearchTerm(e.target.value)} />
                                         <i data-lucide="search" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4"></i>
                                     </div>
                                 </div>
@@ -392,12 +409,12 @@
                                                 <th onClick={() => toggleSort('儲位')}>儲位 <SortIcon colKey="儲位" /></th>
                                                 <th onClick={() => toggleSort('狀態')}>狀態 <SortIcon colKey="狀態" /></th>
                                                 <th onClick={() => toggleSort('廠商')}>廠商 <SortIcon colKey="廠商" /></th>
-                                                <th onClick={() => toggleSort('條碼')}>國際條碼 <SortIcon colKey="條碼" /></th>
-                                                <th className="text-right cursor-default hover:bg-slate-100">功能</th>
+                                                <th onClick={() => toggleSort('條碼')}>條碼 <SortIcon colKey="條碼" /></th>
+                                                <th className="text-right cursor-default">功能</th>
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {getSortedInventory().map(m => (
+                                            {sortedInventory.map(m => (
                                                 <tr key={m.id}>
                                                     <td className="font-mono text-[11px] text-slate-400">{m.代碼}</td>
                                                     <td className="font-bold text-slate-700 text-sm whitespace-normal break-words">{m.品名}</td>
@@ -424,6 +441,9 @@
                                                     </td>
                                                 </tr>
                                             ))}
+                                            {sortedInventory.length === 0 && (
+                                                <tr><td colSpan="7" className="text-center py-10 text-slate-400">查無資料</td></tr>
+                                            )}
                                         </tbody>
                                     </table>
                                 </div>
@@ -431,7 +451,7 @@
                         )}
                     </main>
 
-                    {/* 相機 */}
+                    {/* 相機視窗 */}
                     {isScannerOpen && (
                         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-6 bg-black/95">
                             <div className="text-white mb-6 text-center">
@@ -469,7 +489,7 @@
                                             </select>
                                         </div>
                                     </div>
-                                    <div><label className="text-[10px] font-black text-slate-400 ml-1 uppercase">條碼</label><input id="f-barcode" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500 font-mono" defaultValue={isEditing?.條碼 || ''} /></div>
+                                    <div><label className="text-[10px] font-black text-slate-400 ml-1 uppercase">國際條碼</label><input id="f-barcode" className="w-full p-3 bg-slate-50 border rounded-xl outline-none focus:border-emerald-500 font-mono" defaultValue={isEditing?.條碼 || ''} /></div>
                                 </div>
                                 <button 
                                     onClick={() => handleSave({

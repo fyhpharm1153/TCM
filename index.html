@@ -55,6 +55,18 @@
     </style>
 </head>
 <body>
+    <!-- 全域 Firebase 設定，供診斷與 React 共用 -->
+    <script>
+        var firebaseConfig = {
+            apiKey: "AIzaSyBFYVcsjvev6QDyPYybVLudf-lkEHzf-Xc",
+            authDomain: "fyh-tcm.firebaseapp.com",
+            projectId: "fyh-tcm",
+            storageBucket: "fyh-tcm.firebasestorage.app",
+            messagingSenderId: "710368833882",
+            appId: "1:710368833882:web:56b171791c209281ca4363"
+        };
+    </script>
+
     <!-- 預設載入與自動診斷畫面 -->
     <div id="root">
         <div id="diagnostic-loader" class="flex flex-col items-center justify-center min-h-screen bg-slate-100 text-slate-800 p-6">
@@ -68,7 +80,9 @@
                     ⚠️ 豐醫系統連線診斷報告：
                 </div>
                 <div id="diag-react">● React 網頁引擎: <span class="text-slate-400">檢測中...</span></div>
-                <div id="diag-firebase">● Firebase 資料庫模組: <span class="text-slate-400">檢測中...</span></div>
+                <div id="diag-firebase">● Firebase 模組載入: <span class="text-slate-400">檢測中...</span></div>
+                <div id="diag-firebase-connection">● Firebase 雲端連線: <span class="text-slate-400">檢測中...</span></div>
+                <div id="diag-firebase-rules">● Firebase 讀寫權限: <span class="text-slate-400">檢測中...</span></div>
                 <div id="diag-excel">● Excel 匯入模組: <span class="text-slate-400">檢測中...</span></div>
                 <div id="diag-qrcode">● 相機條碼掃描模組: <span class="text-slate-400">檢測中...</span></div>
                 <div id="diag-network" class="pt-3 text-rose-600 font-bold border-t mt-2"></div>
@@ -90,7 +104,7 @@
 
             var hasError = false;
 
-            // 檢測 React
+            // 1. 檢測 React
             var diagReact = document.getElementById('diag-react');
             if (typeof React !== 'undefined' && typeof ReactDOM !== 'undefined') {
                 diagReact.innerHTML = "● React 網頁引擎: <span class='text-emerald-600 font-bold'>✓ 載入成功</span>";
@@ -99,16 +113,16 @@
                 hasError = true;
             }
 
-            // 檢測 Firebase
+            // 2. 檢測 Firebase 庫
             var diagFirebase = document.getElementById('diag-firebase');
             if (typeof firebase !== 'undefined') {
-                diagFirebase.innerHTML = "● Firebase 資料庫模組: <span class='text-emerald-600 font-bold'>✓ 載入成功</span>";
+                diagFirebase.innerHTML = "● Firebase 模組載入: <span class='text-emerald-600 font-bold'>✓ 載入成功</span>";
             } else {
-                diagFirebase.innerHTML = "● Firebase 資料庫模組: <span class='text-rose-600 font-bold'>✗ 載入失敗 (被院內防火牆封鎖)</span>";
+                diagFirebase.innerHTML = "● Firebase 模組載入: <span class='text-rose-600 font-bold'>✗ 載入失敗 (被院內防火牆封鎖)</span>";
                 hasError = true;
             }
 
-            // 檢測 XLSX
+            // 3. 檢測 XLSX
             var diagExcel = document.getElementById('diag-excel');
             if (typeof XLSX !== 'undefined') {
                 diagExcel.innerHTML = "● Excel 匯入模組: <span class='text-emerald-600 font-bold'>✓ 載入成功</span>";
@@ -117,7 +131,7 @@
                 hasError = true;
             }
 
-            // 檢測 QRCode
+            // 4. 檢測 QRCode
             var diagQrcode = document.getElementById('diag-qrcode');
             if (typeof Html5Qrcode !== 'undefined') {
                 diagQrcode.innerHTML = "● 相機條碼掃描模組: <span class='text-emerald-600 font-bold'>✓ 載入成功</span>";
@@ -129,11 +143,11 @@
             var diagNetwork = document.getElementById('diag-network');
             if (hasError) {
                 loaderSpinner.className = "w-12 h-12 border-4 border-rose-200 border-t-rose-600 rounded-full animate-pulse mb-4";
-                loaderStatus.innerText = "無法載入雲端服務 (Blocked)";
+                loaderStatus.innerText = "連線失敗 (Connection Error)";
                 loaderStatus.className = "text-rose-600 font-black text-lg mb-2";
-                diagNetwork.innerHTML = "排解建議：<br/>1. 院內內網封鎖了雲端套件。請將手機切換成「4G/5G 行動網路」並分享熱點測試。<br/>2. 請聯繫醫院資訊室將 gstatic.com、unpkg.com、firebaseapp.com 加入白名單。";
+                diagNetwork.innerHTML = "排解建議：<br/>1. 若 Firebase 雲端連線失敗，請確認醫院防火牆是否阻擋了 Firebase 端口。<br/>2. 手機請切換至「4G/5G 行動網路」並分享熱點測試。<br/>3. 請確認 Firebase 專案中的 「Authentication (身份驗證)」有沒有開啟「匿名登入 (Anonymous)」。";
             } else {
-                diagNetwork.innerHTML = "提示：所有網路套件皆正常載入。如果是空白畫面，請確認您的 Firebase 安全性規則 (Rules) 是否已正常發佈。";
+                diagNetwork.innerHTML = "提示：所有網路套件皆正常。如果是空白畫面，請確認您的 Firebase 安全性規則 (Rules) 中指定的文件路徑是否與代碼一致。";
             }
         }, 3000); // 3秒後若 React 未成功執行則啟動診斷
     </script>
@@ -141,16 +155,6 @@
     <!-- 主程式腳本 -->
     <script type="text/babel">
         const { useState, useEffect, useRef, useMemo, useCallback } = React;
-
-        // --- Firebase 設定 ---
-        const firebaseConfig = {
-            apiKey: "AIzaSyBFYVcsjvev6QDyPYybVLudf-lkEHzf-Xc",
-            authDomain: "fyh-tcm.firebaseapp.com",
-            projectId: "fyh-tcm",
-            storageBucket: "fyh-tcm.firebasestorage.app",
-            messagingSenderId: "710368833882",
-            appId: "1:710368833882:web:56b171791c209281ca4363"
-        };
 
         // 安全初始化：避免 firebase 載入失敗時整支 JavaScript 報錯崩潰
         let auth = null;
@@ -160,7 +164,7 @@
         if (typeof firebase !== 'undefined') {
             try {
                 if (!firebase.apps.length) {
-                    firebase.initializeApp(firebaseConfig);
+                    firebase.initializeApp(window.firebaseConfig);
                 }
                 auth = firebase.auth();
                 db = firebase.firestore();
@@ -295,6 +299,12 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
                         <line x1="18" y1="6" x2="6" y2="18"></line>
                         <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                ),
+                'chevrons-up-down': (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+                        <polyline points="7 15 12 20 17 15"></polyline>
+                        <polyline points="7 9 12 4 17 9"></polyline>
                     </svg>
                 )
             };
@@ -565,7 +575,7 @@
                             { id: 'search', label: '查詢 / 掃描', icon: 'zap' },
                             { id: 'inventory', label: '品項總表', icon: 'table' }
                         ].map(t => (
-                            <button key={t.id} onClick={() => setActiveTab(t.id)}
+                            <button key={t.id} onClick={() => { setActiveTab(t.id); }}
                                 className={`flex-1 py-3 rounded-xl flex flex-col items-center gap-0.5 transition-all ${activeTab === t.id ? 'tab-active' : 'text-slate-400 hover:bg-slate-50'}`}
                             >
                                 <Icon name={t.icon} className="w-5 h-5 mb-0.5" />

@@ -122,7 +122,75 @@
                 hasError = true;
             }
 
-            // 3. 檢測 XLSX
+            // 3. 實時嘗試連線與權限測試
+            var diagConnect = document.getElementById('diag-firebase-connection');
+            var diagRules = document.getElementById('diag-firebase-rules');
+            var isDiagnosticDone = false;
+
+            // 設置 5 秒超時，防止連線無回應（防火牆丟包）
+            var firebaseTimeout = setTimeout(function() {
+                if (!isDiagnosticDone) {
+                    isDiagnosticDone = true;
+                    diagConnect.innerHTML = "● Firebase 雲端連線: <span class='text-rose-600 font-bold'>✗ 連線超時 (5秒內無回應，可能被院內防火牆攔截)</span>";
+                    diagRules.innerHTML = "● Firebase 讀寫權限: <span class='text-rose-600 font-bold'>✗ 無法測試 (因連線超時)</span>";
+                    loaderSpinner.className = "w-12 h-12 border-4 border-rose-200 border-t-rose-600 rounded-full animate-pulse mb-4";
+                    loaderStatus.innerText = "連線失敗 (Connection Timeout)";
+                    loaderStatus.className = "text-rose-600 font-black text-lg mb-2";
+                    
+                    var diagNetwork = document.getElementById('diag-network');
+                    diagNetwork.innerHTML = "<b>排解建議：</b><br/>" +
+                        "1. 偵測到 Firebase 通訊無回應。這 100% 是因為<b>醫院防火牆封鎖了 Google Firebase 的 API 連線</b>。<br/>" +
+                        "2. 請嘗試<b>用手機開啟行動網路熱點</b>，並將電腦/平板連上手機熱點，重整此網頁即可秒速載入。<br/>" +
+                        "3. 若必須使用院內網，請聯繫醫院資訊室，將以下網域加入防火牆白名單：<br/>" +
+                        "   - <span class='bg-slate-100 p-0.5 rounded'>*.firebaseio.com</span><br/>" +
+                        "   - <span class='bg-slate-100 p-0.5 rounded'>*.googleapis.com</span><br/>" +
+                        "   - <span class='bg-slate-100 p-0.5 rounded'>*.identitytoolkit.googleapis.com</span>";
+                }
+            }, 5000);
+
+            if (typeof firebase !== 'undefined') {
+                try {
+                    if (!firebase.apps.length) {
+                        firebase.initializeApp(firebaseConfig);
+                    }
+                    firebase.auth().signInAnonymously()
+                        .then(function() {
+                            if (isDiagnosticDone) return; // 已超時則不重複處理
+                            clearTimeout(firebaseTimeout);
+                            isDiagnosticDone = true;
+                            diagConnect.innerHTML = "● Firebase 雲端連線: <span class='text-emerald-600 font-bold'>✓ 連線成功 (匿名登入已啟用)</span>";
+                            // 測試 Firestore 讀寫
+                            return firebase.firestore().collection('artifacts').doc('fyh-tcm-manager-v1').collection('public').doc('data').collection('medicines').limit(1).get();
+                        })
+                        .then(function() {
+                            diagRules.innerHTML = "● Firebase 讀寫權限: <span class='text-emerald-600 font-bold'>✓ 權限讀寫正常</span>";
+                        })
+                        .catch(function(err) {
+                            if (isDiagnosticDone && err === undefined) return;
+                            clearTimeout(firebaseTimeout);
+                            isDiagnosticDone = true;
+                            if (err && err.code === "permission-denied") {
+                                diagRules.innerHTML = "● Firebase 讀寫權限: <span class='text-rose-600 font-bold'>✗ 權限拒絕 (請檢查 Firestore 規則)</span>";
+                            } else {
+                                diagConnect.innerHTML = "● Firebase 雲端連線: <span class='text-rose-600 font-bold'>✗ 連線失敗 (" + (err ? err.message : "未知錯誤") + ")</span>";
+                            }
+                            hasError = true;
+                        });
+                } catch (e) {
+                    clearTimeout(firebaseTimeout);
+                    isDiagnosticDone = true;
+                    diagConnect.innerHTML = "● Firebase 雲端連線: <span class='text-rose-600 font-bold'>✗ 連線死當 (" + e.message + ")</span>";
+                    hasError = true;
+                }
+            } else {
+                clearTimeout(firebaseTimeout);
+                isDiagnosticDone = true;
+                diagConnect.innerHTML = "● Firebase 雲端連線: <span class='text-rose-600 font-bold'>✗ 無法測試 (模組未載入)</span>";
+                diagRules.innerHTML = "● Firebase 讀寫權限: <span class='text-rose-600 font-bold'>✗ 無法測試 (模組未載入)</span>";
+                hasError = true;
+            }
+
+            // 4. 檢測 XLSX
             var diagExcel = document.getElementById('diag-excel');
             if (typeof XLSX !== 'undefined') {
                 diagExcel.innerHTML = "● Excel 匯入模組: <span class='text-emerald-600 font-bold'>✓ 載入成功</span>";
@@ -131,23 +199,13 @@
                 hasError = true;
             }
 
-            // 4. 檢測 QRCode
+            // 5. 檢測 QRCode
             var diagQrcode = document.getElementById('diag-qrcode');
             if (typeof Html5Qrcode !== 'undefined') {
                 diagQrcode.innerHTML = "● 相機條碼掃描模組: <span class='text-emerald-600 font-bold'>✓ 載入成功</span>";
             } else {
                 diagQrcode.innerHTML = "● 相機條碼掃描模組: <span class='text-rose-600 font-bold'>✗ 載入失敗</span>";
                 hasError = true;
-            }
-
-            var diagNetwork = document.getElementById('diag-network');
-            if (hasError) {
-                loaderSpinner.className = "w-12 h-12 border-4 border-rose-200 border-t-rose-600 rounded-full animate-pulse mb-4";
-                loaderStatus.innerText = "連線失敗 (Connection Error)";
-                loaderStatus.className = "text-rose-600 font-black text-lg mb-2";
-                diagNetwork.innerHTML = "排解建議：<br/>1. 若 Firebase 雲端連線失敗，請確認醫院防火牆是否阻擋了 Firebase 端口。<br/>2. 手機請切換至「4G/5G 行動網路」並分享熱點測試。<br/>3. 請確認 Firebase 專案中的 「Authentication (身份驗證)」有沒有開啟「匿名登入 (Anonymous)」。";
-            } else {
-                diagNetwork.innerHTML = "提示：所有網路套件皆正常。如果是空白畫面，請確認您的 Firebase 安全性規則 (Rules) 中指定的文件路徑是否與代碼一致。";
             }
         }, 3000); // 3秒後若 React 未成功執行則啟動診斷
     </script>
@@ -299,12 +357,6 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
                         <line x1="18" y1="6" x2="6" y2="18"></line>
                         <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                ),
-                'chevrons-up-down': (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
-                        <polyline points="7 15 12 20 17 15"></polyline>
-                        <polyline points="7 9 12 4 17 9"></polyline>
                     </svg>
                 )
             };
